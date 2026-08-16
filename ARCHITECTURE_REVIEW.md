@@ -247,7 +247,7 @@ Two toolchains, one repo, no monorepo framework (Nx/Turbo unnecessary at this sc
 
 ## 6. Dev tooling & quality gates (backend)
 
-Your first-iteration list from claude.ai holds up well; this is the adopted subset + deltas:
+The first-iteration tooling shortlist held up well under review; this is the adopted subset + deltas:
 
 | Concern | Tool | Notes |
 |---|---|---|

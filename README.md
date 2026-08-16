@@ -191,15 +191,23 @@ port) is documented in [ADR-002](docs/adr/ADR-002-pgvector-single-postgres.md).
 
 ## Quickstart
 
-Prerequisites: Docker + Compose, and one LLM provider API key (OpenAI,
-Gemini, or DeepSeek).
+Prerequisites: Docker + Compose. **No API key is required for the demo** —
+the offline providers (`mock/extractive` chat + `hash/ngram` embeddings) run
+the whole pipeline deterministically; add one real provider key when you
+want actual generation quality.
 
 ```bash
 git clone https://github.com/OWNER/pandu && cd pandu
-cp .env.example .env          # add ONE provider API key (e.g. OPENAI_API_KEY)
+cp .env.example .env          # zero-key demo works as-is;
+                              # for real models set AI_CHAT_MODEL + one provider key
 make up                       # full stack: web :3000, api :8000, worker, postgres, redis
 ./scripts/fetch_corpus.sh     # optional: pull the NIST demo corpus (public domain)
 ```
+
+The mock chat provider extracts and cites the retrieved context verbatim —
+grounded and deterministic by construction, and clearly labelled
+`mock/extractive` in the usage footer. It demos the platform (ingestion,
+hybrid retrieval, SSE streaming, citations, cost metering), not LLM quality.
 
 Open http://localhost:3000, upload PDFs (or the fetched corpus), wait for
 ingestion to report `ready`, and ask questions. The API is self-documenting

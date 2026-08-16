@@ -13,6 +13,7 @@ from app.shared.domain.errors import InvalidInputError
 from app.shared.domain.values import ModelRef
 from app.shared.infrastructure.ai.gemini_adapter import GeminiChatAdapter, GeminiEmbeddingAdapter
 from app.shared.infrastructure.ai.hash_embeddings import HashingEmbedder
+from app.shared.infrastructure.ai.mock_llm import MockExtractiveLLM
 from app.shared.infrastructure.ai.openai_adapter import (
     OpenAIChatAdapter,
     OpenAIEmbeddingAdapter,
@@ -34,7 +35,7 @@ if TYPE_CHECKING:
     from app.shared.domain.ports.llm import LLMProvider
     from app.shared.domain.ports.reranker import Reranker
 
-LLM_PROVIDERS = ("openai", "gemini", "deepseek", "compat")
+LLM_PROVIDERS = ("openai", "gemini", "deepseek", "compat", "mock")
 EMBEDDING_PROVIDERS = ("openai", "gemini", "compat", "hash")
 RERANKER_KINDS = ("none", "cohere", "jina", "local")
 
@@ -88,6 +89,11 @@ class ProviderFactory:
                 ),
                 api_key=settings.openai_compatible_api_key,
             )
+        if ref.provider == "mock":
+            # Deterministic extractive answers for keyless demos/CI. See
+            # mock_llm.py — obviously labelled, never a stand-in for real
+            # generation quality.
+            return MockExtractiveLLM()
         msg = f"unknown LLM provider {ref.provider!r}; expected one of {LLM_PROVIDERS}"
         raise InvalidInputError(msg)
 
