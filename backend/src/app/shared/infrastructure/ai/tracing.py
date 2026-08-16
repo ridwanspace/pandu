@@ -45,9 +45,17 @@ class _LangfuseSpan:
 
 
 class LangfuseTracer:
+    """Adapter for the OTel-based Langfuse SDK (v3+).
+
+    Application trace ids are free-form strings (conversation/document ids);
+    OTel requires 32-hex trace ids, so they are derived deterministically via
+    ``create_trace_id(seed=...)`` — the same app id always lands in the same
+    Langfuse trace.
+    """
+
     def __init__(self, *, public_key: str, secret_key: str, host: str) -> None:
         try:
-            from langfuse import Langfuse
+            from langfuse import Langfuse, propagate_attributes
         except ImportError as exc:
             msg = (
                 "langfuse is not installed; tracing requires the 'observability' "
@@ -55,14 +63,31 @@ class LangfuseTracer:
             )
             raise InvalidInputError(msg) from exc
         self._client: Any = Langfuse(public_key=public_key, secret_key=secret_key, host=host)
+        self._propagate: Any = propagate_attributes
+        # OTel trace id -> name of the first span seen for it. Langfuse names a
+        # trace by the LAST ingested span, so every span re-propagates the root
+        # name ("chat.ask", not whichever retrieval step happened to flush last).
+        self._trace_names: dict[str, str] = {}
 
     @contextmanager
     def span(
         self, name: str, *, trace_id: str | None = None, **attributes: object
     ) -> Iterator[TraceSpan]:
-        span: Any = self._client.span(
-            name=name, trace_id=trace_id, metadata=dict(attributes) or None
-        )
+        trace_context = None
+        trace_name = name
+        if trace_id is not None:
+            otel_id: str = self._client.create_trace_id(seed=trace_id)
+            trace_context = {"trace_id": otel_id}
+            if len(self._trace_names) > 1024:
+                self._trace_names.clear()
+            trace_name = self._trace_names.setdefault(otel_id, name)
+        with self._propagate(trace_name=trace_name):
+            span: Any = self._client.start_observation(
+                name=name,
+                as_type="span",
+                trace_context=trace_context,
+                metadata=dict(attributes) or None,
+            )
         try:
             yield _LangfuseSpan(span)
         finally:

@@ -9,6 +9,13 @@
 [![typescript](https://img.shields.io/badge/typescript-strict-blue)](frontend/)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
+[![FastAPI](https://img.shields.io/badge/FastAPI-modular_monolith-009688?logo=fastapi&logoColor=white)](backend/)
+[![Next.js](https://img.shields.io/badge/Next.js_16-App_Router-black?logo=nextdotjs)](frontend/)
+[![Postgres](https://img.shields.io/badge/Postgres_17-pgvector_%2B_FTS-336791?logo=postgresql&logoColor=white)](docs/adr/ADR-002-pgvector-single-postgres.md)
+[![Redis](https://img.shields.io/badge/Redis-queue_%2B_rate_limits-DC382D?logo=redis&logoColor=white)](backend/src/app/worker.py)
+[![Langfuse](https://img.shields.io/badge/Langfuse_v3-tracing-7C3AED)](docker-compose.yml)
+[![ClickHouse](https://img.shields.io/badge/ClickHouse-trace_analytics-FFCC01?logo=clickhouse&logoColor=black)](docker-compose.yml)
+
 Pandu is a self-hostable enterprise RAG platform: upload documents, ask
 questions, get streamed answers with source citations. It is built as a
 FastAPI modular monolith with hand-implemented hybrid retrieval (dense +
@@ -38,6 +45,16 @@ footer shows tokens, metered cost, and latency for the call.*
 | Documents — upload, parse, chunk, embed | Dashboard — eval metrics & live cost ledger |
 |---|---|
 | ![Documents page with ingestion statuses](assets/documents.png) | ![Dashboard with cost cards and daily spend](assets/dashboard.png) |
+
+![Langfuse trace of a chat request — span waterfall and retrieval metadata](assets/observability.png)
+
+*The same request in the self-hosted Langfuse (v3 on ClickHouse,
+`docker compose --profile observability up`): one `chat.ask` trace with the
+`retrieval.embed → search → rerank` span waterfall. The metadata panel shows
+what the tracer is allowed to record — model ids, candidate counts, RRF
+constant, latencies. Input/output are empty by design: prompt and document
+text never leave the app, and token costs live in Pandu's own metering
+ledger (dashboard above), not the tracing backend.*
 
 ## Why this repo looks the way it does
 
@@ -94,7 +111,7 @@ flowchart LR
     subgraph infra["Infrastructure (docker compose)"]
         PG[("Postgres 17\n+ pgvector\napp data + vectors + FTS")]
         RD[("Redis\nrate limits + job queue")]
-        LF["Langfuse\n(self-hosted, optional profile)"]
+        LF["Langfuse v3 on ClickHouse\n(self-hosted, optional profile)"]
     end
 
     subgraph vendors["LLM vendors (env-switchable)"]
@@ -220,9 +237,20 @@ parsing stress test and produce enterprise-realistic questions ("What are
 the MFA requirements for AAL2?"). See [docs/corpus.md](docs/corpus.md) and
 [CORPUS_LICENSE.md](CORPUS_LICENSE.md).
 
-Langfuse tracing is an optional profile
-(`docker compose --profile observability up`) — the app runs fine without
-it via a no-op tracer.
+Langfuse tracing is an optional profile — the app runs fine without it via
+a no-op tracer:
+
+```bash
+make observability   # self-hosted Langfuse v3 (ClickHouse + MinIO) on :3001
+uv sync --extra observability   # in backend/
+```
+
+First boot headlessly provisions a local org/project with demo keys
+(`pk-lf-pandu-local` / `sk-lf-pandu-local` — they authenticate only against
+your own container; nothing here talks to Langfuse Cloud). Put them in
+`.env` as `LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY`, restart the API, and
+every chat request appears as a `chat.ask` trace with retrieval span
+timings — metrics and ids only, never prompt or document text.
 
 ## Dev loop and quality gates
 
@@ -326,7 +354,7 @@ embeddings, hybrid + RRF, no reranker, `deepseek-v4-flash` judge over the
 │   ├── corpus.md                   # corpus story + golden-set methodology
 │   └── deploy-cloud-run.md         # GCP deployment sketch (roadmap)
 ├── scripts/fetch_corpus.sh         # NIST corpus fetcher
-├── docker-compose.yml              # postgres + redis (+ --profile app: api, worker, web)
+├── docker-compose.yml              # postgres + redis (+ profiles: app · observability/Langfuse)
 ├── Makefile                        # the whole dev interface — `make help`
 └── .github/workflows/              # backend.yml · frontend.yml · evals.yml
 ```

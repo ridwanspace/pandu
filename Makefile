@@ -1,4 +1,4 @@
-.PHONY: help infra dev api worker web up down test lint type arch unit integration contract coverage evals migrate fmt
+.PHONY: help infra dev api worker web up down observability test lint type arch unit integration contract coverage evals migrate fmt
 
 help: ## Show targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -17,6 +17,9 @@ web: ## Run the Next.js dev server
 
 up: ## Full containerized stack
 	docker compose --profile app up -d --build
+
+observability: ## Self-hosted Langfuse (UI on :3001; see .env.example for the local keys)
+	docker compose --profile observability up -d
 
 down: ## Stop everything
 	docker compose --profile app --profile observability down
