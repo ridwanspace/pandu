@@ -2,9 +2,9 @@
 
 **Grounded answers, guided by your documents.**
 
-[![backend CI](https://github.com/OWNER/pandu/actions/workflows/backend.yml/badge.svg)](https://github.com/OWNER/pandu/actions/workflows/backend.yml)
-[![frontend CI](https://github.com/OWNER/pandu/actions/workflows/frontend.yml/badge.svg)](https://github.com/OWNER/pandu/actions/workflows/frontend.yml)
-[![evals](https://github.com/OWNER/pandu/actions/workflows/evals.yml/badge.svg)](https://github.com/OWNER/pandu/actions/workflows/evals.yml)
+[![backend CI](https://github.com/ridwanspace/pandu/actions/workflows/backend.yml/badge.svg)](https://github.com/ridwanspace/pandu/actions/workflows/backend.yml)
+[![frontend CI](https://github.com/ridwanspace/pandu/actions/workflows/frontend.yml/badge.svg)](https://github.com/ridwanspace/pandu/actions/workflows/frontend.yml)
+[![evals](https://github.com/ridwanspace/pandu/actions/workflows/evals.yml/badge.svg)](https://github.com/ridwanspace/pandu/actions/workflows/evals.yml)
 [![python](https://img.shields.io/badge/python-3.13-blue)](backend/pyproject.toml)
 [![typescript](https://img.shields.io/badge/typescript-strict-blue)](frontend/)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
@@ -197,7 +197,7 @@ the whole pipeline deterministically; add one real provider key when you
 want actual generation quality.
 
 ```bash
-git clone https://github.com/OWNER/pandu && cd pandu
+git clone https://github.com/ridwanspace/pandu && cd pandu
 cp .env.example .env          # zero-key demo works as-is;
                               # for real models set AI_CHAT_MODEL + one provider key
 make up                       # full stack: web :3000, api :8000, worker, postgres, redis
