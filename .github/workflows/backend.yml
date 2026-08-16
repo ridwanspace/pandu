@@ -1,0 +1,75 @@
+name: backend
+
+on:
+  push:
+    branches: [main]
+    paths: ["backend/**", ".github/workflows/backend.yml"]
+  pull_request:
+    paths: ["backend/**", ".github/workflows/backend.yml"]
+
+defaults:
+  run:
+    working-directory: backend
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Sync
+        run: uv sync --frozen
+      - name: Lint (ruff)
+        run: |
+          uv run ruff check src tests
+          uv run ruff format --check src tests
+      - name: Security (bandit)
+        run: uv run bandit -c pyproject.toml -q -r src
+      - name: Types (mypy --strict)
+        run: uv run mypy
+      - name: Architecture contracts (import-linter)
+        run: uv run lint-imports
+      - name: Unit tests + domain/application 100% gate
+        # Layered gate (ADR-008): the framework-free core must be fully
+        # unit-tested. Adapters are covered by the integration job below.
+        run: |
+          uv run pytest tests/unit tests/architecture -q \
+            --cov=src/app --cov-report=term-missing:skip-covered
+          uv run coverage report \
+            --include="src/app/modules/*/domain/*,src/app/modules/*/application/*,src/app/shared/domain/*" \
+            --fail-under=100
+
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Sync
+        run: uv sync --frozen
+      - name: All tests + overall 85% gate
+        # Overall coverage is measured where adapters actually execute:
+        # unit + integration (testcontainers) + contract (schemathesis).
+        run: |
+          uv run pytest tests/unit tests/architecture tests/integration tests/contract -q \
+            --cov=src/app --cov-report=term-missing:skip-covered
+          uv run coverage report --fail-under=85
+
+  docker:
+    runs-on: ubuntu-latest
+    needs: [quality]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t pandu-api:ci ./backend
+
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Dependency audit
+        run: uv run --with pip-audit pip-audit --skip-editable || true

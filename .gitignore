@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.uv-cache/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+next-env.d.ts
+*.tsbuildinfo
+
+# Env & secrets
+.env
+.env.*
+!.env.example
+
+# Data & artifacts
+*.log
+pgdata/
+.DS_Store
+playwright-report/
+test-results/
+
+# Fetched eval corpus (large PDFs; fetch with scripts/fetch_corpus.sh)
+backend/evals/corpus/

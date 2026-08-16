@@ -1,0 +1,50 @@
+name: evals
+
+on:
+  schedule:
+    - cron: "0 2 * * *" # nightly
+  workflow_dispatch:
+  pull_request:
+    types: [labeled]
+
+jobs:
+  evals:
+    # Nightly, manual, or when a PR gets the `run-evals` label.
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.label.name == 'run-evals'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: pandu
+          POSTGRES_PASSWORD: pandu
+          POSTGRES_DB: pandu
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U pandu" --health-interval 5s
+          --health-timeout 3s --health-retries 10
+    env:
+      DATABASE_URL: postgresql+asyncpg://pandu:pandu@localhost:5432/pandu
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      AI_CHAT_MODEL: openai/gpt-4o-mini
+      AI_EMBED_MODEL: openai/text-embedding-3-small
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Sync (with eval group)
+        run: uv sync --frozen --group eval
+      - name: Fetch corpus
+        working-directory: .
+        run: bash scripts/fetch_corpus.sh
+      - name: Migrate + ingest corpus + run eval suite
+        run: |
+          uv run alembic upgrade head
+          uv run python -m evals.run --retrieval-only
+        # Thresholds are enforced inside evals.run (tightening-only rule; ADR-008).

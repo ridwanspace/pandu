@@ -1,0 +1,65 @@
+name: frontend
+
+on:
+  push:
+    branches: [main]
+    paths: ["frontend/**", ".github/workflows/frontend.yml"]
+  pull_request:
+    paths: ["frontend/**", ".github/workflows/frontend.yml"]
+
+defaults:
+  run:
+    working-directory: frontend
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Lint + format (biome)
+        run: pnpm exec biome ci .
+      - name: Types
+        run: pnpm exec tsc --noEmit
+      - name: Unit tests
+        run: pnpm exec vitest run
+      - name: Build
+        run: pnpm build
+
+  e2e:
+    runs-on: ubuntu-latest
+    # Full-stack Playwright run against the compose stack; requires provider
+    # secrets, so it only runs when they are configured.
+    if: ${{ github.event_name == 'push' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compose stack
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          if [ -z "$OPENAI_API_KEY" ]; then echo "no provider key; skipping e2e"; exit 0; fi
+          cp .env.example .env
+          sed -i "s/^OPENAI_API_KEY=/OPENAI_API_KEY=$OPENAI_API_KEY/" .env
+          docker compose --profile app up -d --build
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Playwright
+        working-directory: frontend
+        run: |
+          if [ -z "${{ secrets.OPENAI_API_KEY }}" ]; then exit 0; fi
+          pnpm install --frozen-lockfile
+          pnpm exec playwright install --with-deps chromium
+          E2E=1 pnpm exec playwright test
