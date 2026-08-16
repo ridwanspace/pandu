@@ -1,0 +1,19 @@
+sequenceDiagram
+    autonumber
+    participant W as Next.js UI
+    participant A as FastAPI /documents
+    participant Q as arq worker (Redis)
+    participant D as Docling parser
+    participant E as EmbeddingProvider
+    participant PG as Postgres
+
+    W->>A: POST /documents (file upload)
+    A->>PG: create Document (status=queued)
+    A->>Q: enqueue ingest(document_id)
+    A-->>W: 202 + document_id
+    Q->>D: parse → structured blocks
+    Q->>Q: chunk (structure-aware, token window)
+    Q->>E: embed_batch(chunks)
+    Q->>PG: upsert chunks + vectors + tsvector (one tx)
+    Q->>PG: status=ready (or failed + reason)
+    W->>A: GET /documents/{id} (poll status / chunk preview)

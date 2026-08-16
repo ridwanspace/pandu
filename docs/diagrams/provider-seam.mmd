@@ -1,0 +1,22 @@
+flowchart TB
+    subgraph app["application layer (framework-free)"]
+        UC["AnswerQuestion use case"]
+    end
+    subgraph ports["domain ports (Protocols)"]
+        P1["LLMProvider\ncomplete() / stream()"]
+        P2["EmbeddingProvider\nembed_batch()"]
+        P3["Reranker\nrerank()"]
+    end
+    subgraph adapters["shared/infrastructure/ai (only place SDKs are imported)"]
+        A1["OpenAIAdapter"]
+        A2["GeminiAdapter"]
+        A3["DeepSeekAdapter\n(OpenAI-compatible)"]
+        A4["OpenAICompatibleAdapter\n(Ollama, vLLM, Groq, ...)"]
+        F["ProviderFactory\nenv: 'provider/model' strings"]
+        FB["FallbackChain\nprimary → secondary"]
+        CM["CostMeter\ntokens × price table → Postgres"]
+    end
+    UC --> P1 & P2 & P3
+    P1 & P2 & P3 -.implemented by.-> F
+    F --> A1 & A2 & A3 & A4
+    F --> FB --> CM

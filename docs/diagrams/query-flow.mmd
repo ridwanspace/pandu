@@ -1,0 +1,24 @@
+sequenceDiagram
+    autonumber
+    participant W as Next.js UI
+    participant A as FastAPI /chat (SSE)
+    participant R as retrieval module
+    participant PG as Postgres (pgvector + FTS)
+    participant RR as Reranker adapter
+    participant L as LLMProvider adapter
+    participant LF as Langfuse
+
+    W->>A: POST /chat/{id}/messages (question)
+    A->>A: auth + rate limit + input bounds
+    A->>R: retrieve(question, filters)
+    par hybrid search
+        R->>PG: dense: embed(question) → HNSW top-20
+        R->>PG: lexical: websearch_to_tsquery → top-20
+    end
+    R->>R: Reciprocal Rank Fusion (k=60)
+    R->>RR: rerank(question, fused-20) → top-5
+    A->>L: stream(grounded prompt + numbered contexts)
+    L-->>A: token stream (fallback chain on provider error)
+    A-->>W: SSE: tokens + citation markers [1][2]
+    A->>PG: persist message, citations, token usage, cost
+    A--)LF: trace (retrieval spans, rerank scores, generation, cost)

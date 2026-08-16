@@ -1,0 +1,38 @@
+flowchart LR
+    subgraph client["Frontend — Next.js 16"]
+        UI["Chat UI (SSE streaming,\ncitations panel)"]
+        DOCS["Document manager\n(upload, status, chunks)"]
+        DASH["Eval & cost dashboard"]
+    end
+
+    subgraph be["Backend — FastAPI modular monolith"]
+        GW["API layer\n(auth, rate limit, OpenAPI)"]
+        M1["documents module\n(parse → chunk → embed → index)"]
+        M2["retrieval module\n(hybrid search + RRF + rerank)"]
+        M3["chat module\n(RAG orchestration, streaming, citations)"]
+        M4["evaluation module\n(golden set, ragas, LLM-judge)"]
+        SK["shared kernel\nLLM / Embedding / Reranker PORTS\n+ vendor adapters + cost meter"]
+    end
+
+    subgraph infra["Infrastructure (docker compose)"]
+        PG[("Postgres 17\n+ pgvector\napp data + vectors + FTS")]
+        RD[("Redis\nrate limits + job queue")]
+        LF["Langfuse\n(self-hosted, optional profile)"]
+    end
+
+    subgraph vendors["LLM vendors (env-switchable)"]
+        V1["OpenAI"]
+        V2["Google Gemini"]
+        V3["DeepSeek"]
+        V4["+ any OpenAI-compatible\nor new adapter"]
+    end
+
+    UI -->|SSE| GW
+    DOCS --> GW
+    DASH --> GW
+    GW --> M1 & M2 & M3 & M4
+    M1 & M2 & M3 & M4 --> SK
+    M1 & M2 & M3 & M4 --> PG
+    M1 --> RD
+    SK --> V1 & V2 & V3 & V4
+    SK -.traces.-> LF
