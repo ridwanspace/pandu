@@ -64,7 +64,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build image
-        run: docker build -t pandu-api:ci ./backend
+        # working-directory is already backend/ (workflow default)
+        run: docker build -t pandu-api:ci .
 
   audit:
     runs-on: ubuntu-latest
