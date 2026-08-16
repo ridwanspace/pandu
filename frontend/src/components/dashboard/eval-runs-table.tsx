@@ -34,7 +34,7 @@ export function EvalRunsTable({ runs }: { runs: EvalRunOut[] }) {
   );
 
   return (
-    <div className="overflow-x-auto rounded-lg border">
+    <div className="overflow-x-auto rounded-xl border">
       <Table>
         <TableHeader>
           <TableRow>

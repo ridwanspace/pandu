@@ -5,16 +5,18 @@ import { UploadDropzone } from "@/components/documents/upload-dropzone";
 
 export default function DocumentsPage() {
   return (
-    <div className="mx-auto w-full max-w-5xl space-y-6 p-6">
-      <div>
-        <h1 className="text-lg font-semibold tracking-tight">Documents</h1>
-        <p className="text-sm text-muted-foreground">
-          The corpus behind every answer. Upload files and watch them move through parsing, chunking
-          and embedding.
-        </p>
+    <div className="canvas-panel min-h-0 flex-1 overflow-y-auto">
+      <div className="mx-auto w-full max-w-5xl space-y-6 p-6 lg:p-8">
+        <div>
+          <h1 className="text-lg font-semibold tracking-tight">Documents</h1>
+          <p className="text-sm text-muted-foreground">
+            The corpus behind every answer. Upload files and watch them move through parsing,
+            chunking and embedding.
+          </p>
+        </div>
+        <UploadDropzone />
+        <DocumentsTable />
       </div>
-      <UploadDropzone />
-      <DocumentsTable />
     </div>
   );
 }

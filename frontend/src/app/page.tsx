@@ -72,20 +72,22 @@ export default function ChatPage() {
   }, [stream, lastAssistant]);
 
   return (
-    <div className="flex h-[calc(100dvh-3.5rem)] overflow-hidden">
-      <ConversationSidebar selectedId={conversationId} onSelect={selectConversation} />
-      <section className="flex min-w-0 flex-1 flex-col">
-        <div className="flex-1 overflow-y-auto">
-          <MessageList
-            messages={items}
-            stream={stream}
-            isLoading={conversationId !== null && messages.isPending}
-            activeMarker={activeMarker}
-            onMarkerClick={(marker) => setActiveMarker(marker)}
-          />
-        </div>
-        <ChatInput disabled={isStreaming} onSend={handleSend} />
-      </section>
+    <div className="flex h-full min-h-0 gap-2 overflow-hidden sm:gap-2.5">
+      <div className="canvas-panel flex min-w-0 flex-1 overflow-hidden">
+        <ConversationSidebar selectedId={conversationId} onSelect={selectConversation} />
+        <section className="flex min-w-0 flex-1 flex-col">
+          <div className="flex flex-1 flex-col overflow-y-auto">
+            <MessageList
+              messages={items}
+              stream={stream}
+              isLoading={conversationId !== null && messages.isPending}
+              activeMarker={activeMarker}
+              onMarkerClick={(marker) => setActiveMarker(marker)}
+            />
+          </div>
+          <ChatInput disabled={isStreaming} onSend={handleSend} />
+        </section>
+      </div>
       <SourcesPanel
         citations={citations}
         citedMarkers={cited}

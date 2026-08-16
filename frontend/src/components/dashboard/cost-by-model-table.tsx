@@ -21,7 +21,7 @@ export function CostByModelTable({ rows }: { rows: CostByModelOut[] }) {
   }
 
   return (
-    <div className="overflow-x-auto rounded-lg border">
+    <div className="overflow-x-auto rounded-xl border">
       <Table>
         <TableHeader>
           <TableRow>

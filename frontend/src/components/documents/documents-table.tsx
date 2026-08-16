@@ -86,7 +86,7 @@ export function DocumentsTable() {
 
   return (
     <>
-      <div className="overflow-x-auto rounded-lg border">
+      <div className="overflow-x-auto rounded-xl border">
         <Table data-testid="documents-table">
           <TableHeader>
             <TableRow>

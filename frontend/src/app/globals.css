@@ -39,6 +39,13 @@
   --color-popover: var(--popover);
   --color-card-foreground: var(--card-foreground);
   --color-card: var(--card);
+  --color-chrome: var(--chrome);
+  --color-chrome-foreground: var(--chrome-foreground);
+  --color-chrome-muted: var(--chrome-muted);
+  --color-chrome-elevated: var(--chrome-elevated);
+  --color-chrome-border: var(--chrome-border);
+  --color-brand-from: var(--brand-from);
+  --color-brand-to: var(--brand-to);
   --radius-sm: calc(var(--radius) * 0.6);
   --radius-md: calc(var(--radius) * 0.8);
   --radius-lg: var(--radius);
@@ -49,72 +56,99 @@
 }
 
 :root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
+  /* Light canvas floating inside the dark chrome (reference default). */
+  --background: oklch(0.993 0.003 80);
+  --foreground: oklch(0.21 0.01 285);
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
+  --card-foreground: oklch(0.21 0.01 285);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.21 0.01 285);
+  /* Warm accent — used sparingly: primary actions, citations, highlights. */
+  --primary: oklch(0.645 0.185 36);
+  --primary-foreground: oklch(0.99 0.005 80);
+  --secondary: oklch(0.955 0.007 70);
+  --secondary-foreground: oklch(0.25 0.01 285);
+  --muted: oklch(0.955 0.006 75);
+  --muted-foreground: oklch(0.5 0.012 60);
+  --accent: oklch(0.95 0.012 60);
+  --accent-foreground: oklch(0.25 0.01 285);
   --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
+  --border: oklch(0.92 0.008 75);
+  --input: oklch(0.9 0.008 75);
+  --ring: oklch(0.72 0.14 45);
   --chart-1: oklch(0.87 0 0);
   --chart-2: oklch(0.556 0 0);
   --chart-3: oklch(0.439 0 0);
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
-  --radius: 0.625rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+  --radius: 0.875rem;
+  /* Inset panel on the light canvas (conversation list). */
+  --sidebar: oklch(0.97 0.005 75);
+  --sidebar-foreground: oklch(0.21 0.01 285);
+  --sidebar-primary: oklch(0.645 0.185 36);
+  --sidebar-primary-foreground: oklch(0.99 0.005 80);
+  --sidebar-accent: oklch(0.925 0.012 65);
+  --sidebar-accent-foreground: oklch(0.21 0.01 285);
+  --sidebar-border: oklch(0.92 0.008 75);
+  --sidebar-ring: oklch(0.72 0.14 45);
+  /* Dark app chrome: frame, left nav, sources column. */
+  --chrome: oklch(0.215 0.01 285);
+  --chrome-foreground: oklch(0.97 0.005 80);
+  --chrome-muted: oklch(0.67 0.012 285);
+  --chrome-elevated: oklch(0.29 0.012 285);
+  --chrome-border: oklch(1 0 0 / 8%);
+  /* Brand gradient stops (logo tile, primary buttons). */
+  --brand-from: oklch(0.685 0.19 36);
+  --brand-to: oklch(0.78 0.145 55);
+  /* Soft warm backdrop the app frame floats on. */
+  --backdrop: oklch(0.93 0.012 75);
+  --backdrop-glow-1: oklch(0.78 0.11 40 / 50%);
+  --backdrop-glow-2: oklch(0.83 0.09 50 / 40%);
 }
 
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
+  /* Canvas darkens but stays a step lighter than the chrome around it. */
+  --background: oklch(0.235 0.008 285);
+  --foreground: oklch(0.965 0.005 80);
+  --card: oklch(0.28 0.009 285);
+  --card-foreground: oklch(0.965 0.005 80);
+  --popover: oklch(0.27 0.009 285);
+  --popover-foreground: oklch(0.965 0.005 80);
+  --primary: oklch(0.685 0.175 38);
+  --primary-foreground: oklch(0.99 0.005 80);
+  --secondary: oklch(0.31 0.01 285);
+  --secondary-foreground: oklch(0.965 0.005 80);
+  --muted: oklch(0.3 0.01 285);
+  --muted-foreground: oklch(0.72 0.01 285);
+  --accent: oklch(0.32 0.012 285);
+  --accent-foreground: oklch(0.965 0.005 80);
   --destructive: oklch(0.704 0.191 22.216);
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
+  --ring: oklch(0.62 0.13 45);
   --chart-1: oklch(0.87 0 0);
   --chart-2: oklch(0.556 0 0);
   --chart-3: oklch(0.439 0 0);
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar: oklch(0.26 0.009 285);
+  --sidebar-foreground: oklch(0.965 0.005 80);
+  --sidebar-primary: oklch(0.685 0.175 38);
+  --sidebar-primary-foreground: oklch(0.99 0.005 80);
+  --sidebar-accent: oklch(0.32 0.012 285);
+  --sidebar-accent-foreground: oklch(0.965 0.005 80);
   --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+  --sidebar-ring: oklch(0.62 0.13 45);
+  --chrome: oklch(0.165 0.008 285);
+  --chrome-foreground: oklch(0.965 0.005 80);
+  --chrome-muted: oklch(0.66 0.012 285);
+  --chrome-elevated: oklch(0.245 0.01 285);
+  --chrome-border: oklch(1 0 0 / 7%);
+  --brand-from: oklch(0.66 0.18 36);
+  --brand-to: oklch(0.75 0.14 55);
+  --backdrop: oklch(0.115 0.008 285);
+  --backdrop-glow-1: oklch(0.45 0.11 40 / 25%);
+  --backdrop-glow-2: oklch(0.4 0.09 50 / 18%);
 }
 
 @layer base {
@@ -122,9 +156,29 @@
     @apply border-border outline-ring/50;
   }
   body {
-    @apply bg-background text-foreground;
+    @apply text-foreground;
+    background-color: var(--backdrop);
+    background-image:
+      radial-gradient(56rem 38rem at 88% -8%, var(--backdrop-glow-1), transparent 62%),
+      radial-gradient(48rem 34rem at -8% 108%, var(--backdrop-glow-2), transparent 62%);
+    background-attachment: fixed;
   }
   html {
     @apply font-sans;
+  }
+}
+
+@layer components {
+  /* Warm brand gradient: logo tile, primary buttons, small highlights. */
+  .brand-gradient {
+    background-image: linear-gradient(135deg, var(--brand-from), var(--brand-to));
+  }
+  /* Light rounded content surface floating on the dark chrome. */
+  .canvas-panel {
+    background-color: var(--background);
+    border-radius: calc(var(--radius) * 1.6);
+    box-shadow:
+      0 1px 2px oklch(0 0 0 / 6%),
+      0 16px 40px -24px oklch(0 0 0 / 35%);
   }
 }

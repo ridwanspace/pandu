@@ -26,7 +26,7 @@ export function ChatInput({ disabled, onSend }: ChatInputProps) {
 
   return (
     <form
-      className="border-t bg-background p-4"
+      className="border-t border-border/70 p-4"
       onSubmit={(e) => {
         e.preventDefault();
         void submit();
@@ -46,7 +46,7 @@ export function ChatInput({ disabled, onSend }: ChatInputProps) {
           }}
           placeholder="Ask a question about your documents…"
           rows={2}
-          className="max-h-40 min-h-9 flex-1 resize-none"
+          className="max-h-40 min-h-9 flex-1 resize-none rounded-xl bg-muted/50"
           disabled={disabled}
         />
         <Button

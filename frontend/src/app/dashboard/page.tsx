@@ -49,77 +49,79 @@ export default function DashboardPage() {
     costs.data && totalCalls > 0 ? String(Number(costs.data.total_usd) / totalCalls) : null;
 
   return (
-    <div className="mx-auto w-full max-w-6xl space-y-8 p-6">
-      <div>
-        <h1 className="text-lg font-semibold tracking-tight">Dashboard</h1>
-        <p className="text-sm text-muted-foreground">
-          Retrieval quality over eval runs and LLM spend for the last {COST_WINDOW_DAYS} days.
-        </p>
-      </div>
+    <div className="canvas-panel min-h-0 flex-1 overflow-y-auto">
+      <div className="mx-auto w-full max-w-6xl space-y-8 p-6 lg:p-8">
+        <div>
+          <h1 className="text-lg font-semibold tracking-tight">Dashboard</h1>
+          <p className="text-sm text-muted-foreground">
+            Retrieval quality over eval runs and LLM spend for the last {COST_WINDOW_DAYS} days.
+          </p>
+        </div>
 
-      {costs.isError && evals.isError ? (
-        <p className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
-          Could not reach the API. Check the connection in Settings.
-        </p>
-      ) : null}
-
-      <section aria-label="Cost summary" className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {costs.isPending ? (
-          <>
-            <Skeleton className="h-28" />
-            <Skeleton className="h-28" />
-            <Skeleton className="h-28" />
-            <Skeleton className="h-28" />
-          </>
-        ) : costs.data ? (
-          <>
-            <StatCard
-              label="Total spend"
-              value={formatUsd(costs.data.total_usd)}
-              hint={`last ${COST_WINDOW_DAYS} days`}
-            />
-            <StatCard label="LLM calls" value={formatCount(totalCalls)} />
-            <StatCard label="Avg cost / call" value={formatUsd(avgCost)} />
-            <StatCard label="Models used" value={String(models)} />
-          </>
+        {costs.isError && evals.isError ? (
+          <p className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
+            Could not reach the API. Check the connection in Settings.
+          </p>
         ) : null}
-      </section>
 
-      <section aria-label="Evaluation" className="space-y-4">
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Retrieval metrics over runs</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {evals.isPending ? (
-              <SectionSkeleton />
-            ) : evals.isError ? (
-              <p className="text-sm text-muted-foreground">Could not load eval runs.</p>
-            ) : (
-              <MetricTrendChart runs={evals.data.items} />
-            )}
-          </CardContent>
-        </Card>
-        {evals.data ? <EvalRunsTable runs={evals.data.items} /> : null}
-      </section>
+        <section aria-label="Cost summary" className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {costs.isPending ? (
+            <>
+              <Skeleton className="h-28" />
+              <Skeleton className="h-28" />
+              <Skeleton className="h-28" />
+              <Skeleton className="h-28" />
+            </>
+          ) : costs.data ? (
+            <>
+              <StatCard
+                label="Total spend"
+                value={formatUsd(costs.data.total_usd)}
+                hint={`last ${COST_WINDOW_DAYS} days`}
+              />
+              <StatCard label="LLM calls" value={formatCount(totalCalls)} />
+              <StatCard label="Avg cost / call" value={formatUsd(avgCost)} />
+              <StatCard label="Models used" value={String(models)} />
+            </>
+          ) : null}
+        </section>
 
-      <section aria-label="Costs" className="space-y-4">
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Daily spend</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {costs.isPending ? (
-              <SectionSkeleton />
-            ) : costs.isError ? (
-              <p className="text-sm text-muted-foreground">Could not load cost stats.</p>
-            ) : (
-              <DailyCostChart daily={costs.data.daily} />
-            )}
-          </CardContent>
-        </Card>
-        {costs.data ? <CostByModelTable rows={costs.data.by_model} /> : null}
-      </section>
+        <section aria-label="Evaluation" className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Retrieval metrics over runs</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {evals.isPending ? (
+                <SectionSkeleton />
+              ) : evals.isError ? (
+                <p className="text-sm text-muted-foreground">Could not load eval runs.</p>
+              ) : (
+                <MetricTrendChart runs={evals.data.items} />
+              )}
+            </CardContent>
+          </Card>
+          {evals.data ? <EvalRunsTable runs={evals.data.items} /> : null}
+        </section>
+
+        <section aria-label="Costs" className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Daily spend</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {costs.isPending ? (
+                <SectionSkeleton />
+              ) : costs.isError ? (
+                <p className="text-sm text-muted-foreground">Could not load cost stats.</p>
+              ) : (
+                <DailyCostChart daily={costs.data.daily} />
+              )}
+            </CardContent>
+          </Card>
+          {costs.data ? <CostByModelTable rows={costs.data.by_model} /> : null}
+        </section>
+      </div>
     </div>
   );
 }

@@ -36,7 +36,7 @@ export function ConversationSidebar({ selectedId, onSelect }: ConversationSideba
   });
 
   return (
-    <aside className="flex w-60 shrink-0 flex-col border-r bg-sidebar max-md:hidden">
+    <aside className="flex w-56 shrink-0 flex-col border-r border-border/70 bg-sidebar max-md:hidden">
       <div className="p-3">
         <Button
           className="w-full"
@@ -72,7 +72,7 @@ export function ConversationSidebar({ selectedId, onSelect }: ConversationSideba
                   type="button"
                   onClick={() => onSelect(c.id)}
                   className={cn(
-                    "w-full rounded-md px-2.5 py-2 text-left transition-colors",
+                    "w-full rounded-xl px-2.5 py-2 text-left transition-colors",
                     selectedId === c.id
                       ? "bg-sidebar-accent text-sidebar-accent-foreground"
                       : "hover:bg-sidebar-accent/60",

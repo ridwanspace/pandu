@@ -73,10 +73,10 @@ export function CitationText({
               aria-label={`Source ${marker}`}
               onClick={() => onMarkerClick?.(marker)}
               className={cn(
-                "inline-flex min-w-4 items-center justify-center rounded-sm border px-1 font-mono text-[0.65rem] leading-4 transition-colors",
+                "inline-flex min-w-4 items-center justify-center rounded-full px-1.5 font-mono text-[0.65rem] leading-4 transition-colors",
                 activeMarker === marker
-                  ? "border-primary bg-primary text-primary-foreground"
-                  : "border-border bg-secondary text-secondary-foreground hover:border-primary/50",
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-primary/10 text-primary hover:bg-primary/20",
               )}
             >
               {marker}
