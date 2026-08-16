@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 from app.shared.domain.errors import InvalidInputError
 from app.shared.domain.values import ModelRef
 from app.shared.infrastructure.ai.gemini_adapter import GeminiChatAdapter, GeminiEmbeddingAdapter
+from app.shared.infrastructure.ai.hash_embeddings import HashingEmbedder
 from app.shared.infrastructure.ai.openai_adapter import (
     OpenAIChatAdapter,
     OpenAIEmbeddingAdapter,
@@ -34,7 +35,7 @@ if TYPE_CHECKING:
     from app.shared.domain.ports.reranker import Reranker
 
 LLM_PROVIDERS = ("openai", "gemini", "deepseek", "compat")
-EMBEDDING_PROVIDERS = ("openai", "gemini", "compat")
+EMBEDDING_PROVIDERS = ("openai", "gemini", "compat", "hash")
 RERANKER_KINDS = ("none", "cohere", "jina", "local")
 
 
@@ -116,8 +117,15 @@ class ProviderFactory:
                 api_key=settings.openai_compatible_api_key,
                 dimensions=settings.embedding_dimensions,
             )
+        if ref.provider == "hash":
+            # Offline n-gram embedder: keyless quickstart/CI, or single-key
+            # deployments on chat-only vendors. See hash_embeddings.py.
+            return HashingEmbedder(dimensions=settings.embedding_dimensions, model_name=ref.name)
         if ref.provider == "deepseek":
-            msg = "deepseek has no embedding API; configure AI_EMBED_MODEL with openai or gemini"
+            msg = (
+                "deepseek has no embedding API; configure AI_EMBED_MODEL with "
+                "openai, gemini, or the offline hash/ngram embedder"
+            )
             raise InvalidInputError(msg)
         msg = f"unknown embedding provider {ref.provider!r}; expected one of {EMBEDDING_PROVIDERS}"
         raise InvalidInputError(msg)

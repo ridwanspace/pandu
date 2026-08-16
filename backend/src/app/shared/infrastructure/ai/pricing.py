@@ -57,7 +57,10 @@ DEFAULT_PRICE_ROWS: tuple[PriceRow, ...] = (
     PriceRow("gemini", "gemini-2.5-flash", Decimal("0.30"), Decimal("2.50")),
     PriceRow("gemini", "gemini-2.5-pro", Decimal("1.25"), Decimal("10.00")),
     PriceRow("gemini", "gemini-embedding", Decimal("0.15"), Decimal("0")),
-    # DeepSeek
+    # DeepSeek (peak rates; DeepSeek bills off-peak at half these — we meter
+    # conservatively at peak)
+    PriceRow("deepseek", "deepseek-v4-flash", Decimal("0.14"), Decimal("0.28")),
+    PriceRow("deepseek", "deepseek-v4-pro", Decimal("0.435"), Decimal("0.87")),
     PriceRow("deepseek", "deepseek-chat", Decimal("0.27"), Decimal("1.10")),
     PriceRow("deepseek", "deepseek-reasoner", Decimal("0.55"), Decimal("2.19")),
 )
