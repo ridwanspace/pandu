@@ -22,6 +22,22 @@ enforced by a CI gate, not asserted.
 
 ---
 
+## See it running
+
+Captured from a live local stack (Playwright + system Chrome driving the real
+UI → API → Postgres → DeepSeek, no mocks):
+
+![Chat — streamed answer with inline citations and the retrieved-vs-cited sources panel](assets/chat.png)
+
+*A cross-document question answered by `deepseek/deepseek-v4-flash`: hybrid
+retrieval (pgvector + FTS + RRF) pulled one chunk from each document, the
+answer cites them inline as [1] [2], and the footer shows tokens, metered
+cost, and latency for the call.*
+
+| Documents — upload, parse, chunk, embed | Dashboard — eval metrics & live cost ledger |
+|---|---|
+| ![Documents page with ingestion statuses](assets/documents.png) | ![Dashboard with cost cards and daily spend](assets/dashboard.png) |
+
 ## Why this repo looks the way it does
 
 Anyone can wire a vector store to an LLM in an afternoon. The difference

@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from redis.asyncio import Redis
 
 from app.config import Settings, get_settings
@@ -184,6 +185,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.add_middleware(SecurityHeadersMiddleware)
+    # Auth is a header (X-API-Key), never a cookie, so credentials stay off.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_origin_list,
+        allow_methods=["GET", "POST", "DELETE"],
+        allow_headers=["X-API-Key", "Content-Type"],
+    )
 
     limiter = RedisRateLimiter(
         redis,

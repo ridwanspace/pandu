@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     # ── Auth & limits ────────────────────────────────────────────────────
     # Comma-separated list of accepted API keys (clients send X-API-Key).
     api_keys: str = ""
+    # Comma-separated browser origins allowed to call the API (CORS).
+    cors_origins: str = "http://localhost:3000"
     rate_limit_requests: int = 60
     rate_limit_window_seconds: int = 60
     max_upload_bytes: int = 25 * 1024 * 1024
@@ -69,6 +71,10 @@ class Settings(BaseSettings):
     @property
     def api_key_list(self) -> list[str]:
         return [k.strip() for k in self.api_keys.split(",") if k.strip()]
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
 
 @lru_cache(maxsize=1)

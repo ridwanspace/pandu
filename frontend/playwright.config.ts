@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { defineConfig, devices } from "@playwright/test";
 
 /**
@@ -6,7 +7,18 @@ import { defineConfig, devices } from "@playwright/test";
  * so `pnpm test:e2e` is safe to run anywhere.
  *
  *   E2E_BASE_URL=http://localhost:3000 E2E_API_KEY=<key> pnpm test:e2e
+ *
+ * Browser: the system Chrome is preferred (CHROME_PATH overrides; falls back
+ * to Playwright's bundled Chromium when none is installed) so e2e runs match
+ * the browser users actually have — and CI needs no `playwright install`.
  */
+const systemChrome = [
+  process.env.CHROME_PATH,
+  "/usr/bin/google-chrome",
+  "/usr/bin/google-chrome-stable",
+  "/usr/bin/chromium",
+].find((p) => p && existsSync(p));
+
 export default defineConfig({
   testDir: "./e2e",
   fullyParallel: false,
@@ -17,5 +29,13 @@ export default defineConfig({
     baseURL: process.env.E2E_BASE_URL ?? "http://localhost:3000",
     trace: "retain-on-failure",
   },
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  projects: [
+    {
+      name: "chromium",
+      use: {
+        ...devices["Desktop Chrome"],
+        launchOptions: systemChrome ? { executablePath: systemChrome } : {},
+      },
+    },
+  ],
 });
