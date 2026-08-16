@@ -16,11 +16,13 @@ import { formatDateTime } from "@/lib/format";
 
 const MAX_SERIES = CHART_SERIES.length;
 
-/** Prefer the headline retrieval metrics, then fill up to the series cap. */
+/** Prefer the headline retrieval metrics, then fill up to the series cap.
+ * Count-like series (e.g. `examples`) are excluded — mixing counts with 0..1
+ * scores flattens the metric lines against the axis. */
 function selectMetrics(runs: EvalRunOut[]): string[] {
   const names = new Set<string>();
   for (const run of runs) for (const name of Object.keys(run.metrics)) names.add(name);
-  const all = [...names];
+  const all = [...names].filter((n) => !/example|count|^k$/i.test(n));
   const preferred = all.filter((n) => /recall|mrr/i.test(n)).sort();
   const rest = all.filter((n) => !/recall|mrr/i.test(n)).sort();
   return [...preferred, ...rest].slice(0, MAX_SERIES);

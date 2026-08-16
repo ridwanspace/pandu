@@ -29,10 +29,11 @@ UI → API → Postgres → DeepSeek, no mocks):
 
 ![Chat — streamed answer with inline citations and the retrieved-vs-cited sources panel](assets/chat.png)
 
-*A cross-document question answered by `deepseek/deepseek-v4-flash`: hybrid
-retrieval (pgvector + FTS + RRF) pulled one chunk from each document, the
-answer cites them inline as [1] [2], and the footer shows tokens, metered
-cost, and latency for the call.*
+*A cross-document question over the NIST corpus: hybrid retrieval
+(pgvector + FTS + RRF, `gemini-embedding-001`) surfaces §4.2.3
+Reauthentication from SP 800-63B and control AU-11 from SP 800-53r5;
+`deepseek-v4-flash` answers grounded with inline [n] citations, and the
+footer shows tokens, metered cost, and latency for the call.*
 
 | Documents — upload, parse, chunk, embed | Dashboard — eval metrics & live cost ledger |
 |---|---|
@@ -260,7 +261,18 @@ evals:    (nightly + on-demand label) ragas suite on golden dataset
 Evaluation is the differentiator between "it seems to work" and "it works,
 and here is by how much."
 
-- **Golden dataset** — 50–100 question/answer/source triples over the NIST
+**Measured on the NIST corpus** (2026-08-16, `gemini-embedding-001`
+embeddings, hybrid + RRF, no reranker, `deepseek-v4-flash` judge over the
+15-example golden set):
+
+| Metric | Score | Gate |
+|---|---|---|
+| recall@5 (retrieval, LLM-free) | **0.967** | ≥ 0.60 |
+| MRR (retrieval, LLM-free) | **0.822** | — |
+| faithfulness (LLM-as-judge) | **0.852** | ≥ 0.85 |
+| answer relevancy (LLM-as-judge) | **0.870** | — |
+
+- **Golden dataset** — 15 (growing toward 50–100) question/answer/source triples over the NIST
   corpus, versioned as JSONL in `backend/evals/`. Candidates are
   bootstrapped with ragas' `TestsetGenerator`, then **every item is
   human-curated** — synthetic-only golden sets are a known anti-pattern.

@@ -21,10 +21,24 @@ the script.
 
 | File | Publication | Why it's in the set |
 |---|---|---|
-| `nist-sp-800-53r5.pdf` | SP 800-53 rev. 5 — Security and Privacy Controls | ~700 pages of dense control-catalog tables: the stress test for layout-aware parsing and structure-aware chunking |
+| `nist-sp-800-53r5.pdf` | SP 800-53 rev. 5 — Security and Privacy Controls | Dense control-catalog tables: the stress test for layout-aware parsing and structure-aware chunking |
 | `nist-sp-800-63b.pdf` | SP 800-63B — Digital Identity: Authentication & Lifecycle | Precise normative language (AAL levels, MFA requirements) — great for factual-grounding questions |
 | `nist-sp-800-171r3.pdf` | SP 800-171 rev. 3 — Protecting CUI | Overlaps 800-53 conceptually, enabling cross-document and "which document says X" questions |
 | `nist-csf-2.0.pdf` | CSWP 29 — Cybersecurity Framework 2.0 | Framework functions map into 800-53 controls — natural multi-hop material |
+
+### Demo excerpt: SP 800-53r5
+
+The full SP 800-53r5 is 492 pages and costs tens of CPU-minutes to parse
+with Docling's layout models. For the demo/eval corpus we deliberately
+ingest a **56-page excerpt** — title/abstract, chapters 1–2 (how the control
+catalog is organized), the chapter-3 opening with AC-1/AC-2, the complete
+Audit & Accountability family (AU-1…AU-16, incl. AU-9 and AU-11), and the
+complete Incident Response family — which is every section the golden
+dataset references. The excerpt is produced from the fetched PDF with
+`pypdfium2` (page ranges 1–3, 28–49, 92–109, 176–188 of the original) and
+uploaded under the canonical filename so golden-set source matching is
+unaffected. Nothing stops you ingesting the full document — it just takes
+CPU time, not money.
 
 ## Why this corpus
 

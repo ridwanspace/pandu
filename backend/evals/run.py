@@ -136,6 +136,10 @@ async def _amain(args: argparse.Namespace) -> int:
                 dataset_loader=loader,
                 dataset_version=DATASET_VERSION,
                 config={**config, "judge_model": judge_model},
+                # Reasoning models (e.g. deepseek-v4-*) spend completion budget
+                # on hidden reasoning before emitting the JSON verdict; a tight
+                # cap truncates the JSON mid-object.
+                max_output_tokens=2048,
             )
             judge_run = await judge_eval()
             _print_metrics(f"Judge metrics ({judge_run.dataset_version})", judge_run.metrics)

@@ -80,4 +80,6 @@ class WorkerSettings:
     on_shutdown = shutdown
     redis_settings = RedisSettings.from_dsn(get_settings().redis_url)
     max_jobs = 4
-    job_timeout = 15 * 60  # PDF parsing of large files is slow but bounded.
+    # CPU-parsing a dense 500-page publication (e.g. NIST SP 800-53r5) can
+    # take tens of minutes with Docling's layout models; keep headroom.
+    job_timeout = 60 * 60
