@@ -1,0 +1,258 @@
+"""Evaluation use cases with hand-written fakes — no DB, network, or LLM."""
+
+from __future__ import annotations
+
+import json
+from uuid import uuid4
+
+import pytest
+
+from app.modules.evaluation.application.use_cases import (
+    ListEvalRuns,
+    RunJudgeEval,
+    RunRetrievalEval,
+)
+from app.modules.evaluation.domain.entities import EvalRun, GoldenExample
+from app.modules.retrieval.application.dto import RetrievalQuery, RetrievedContext
+from app.modules.retrieval.domain.entities import RankedChunk
+from app.shared.domain.errors import InvalidInputError
+from app.shared.domain.ports.llm import (
+    CompletionRequest,
+    CompletionResult,
+    StreamEvent,
+)
+from app.shared.domain.values import ModelRef, TokenUsage
+
+# ── Fixtures ─────────────────────────────────────────────────────────────────
+
+
+def _chunk(filename: str, text: str = "body", heading: tuple[str, ...] = ()) -> RankedChunk:
+    return RankedChunk(
+        chunk_id=uuid4(),
+        document_id=uuid4(),
+        seq=0,
+        text=text,
+        filename=filename,
+        heading_path=heading,
+        fused_score=1.0,
+    )
+
+
+def _context(*chunks: RankedChunk) -> RetrievedContext:
+    return RetrievedContext(
+        chunks=chunks,
+        candidate_count=len(chunks),
+        reranker="none",
+        embed_latency_ms=1,
+        search_latency_ms=1,
+        rerank_latency_ms=0,
+    )
+
+
+class FakeRetrieve:
+    """Canned RetrievedContext per question text."""
+
+    def __init__(self, by_question: dict[str, RetrievedContext]) -> None:
+        self._by_question = by_question
+        self.queries: list[RetrievalQuery] = []
+
+    async def __call__(
+        self, query: RetrievalQuery, *, trace_id: str | None = None
+    ) -> RetrievedContext:
+        self.queries.append(query)
+        return self._by_question[query.text]
+
+
+class InMemoryEvalRunRepository:
+    def __init__(self) -> None:
+        self.runs: list[EvalRun] = []
+
+    async def add(self, run: EvalRun) -> None:
+        self.runs.append(run)
+
+    async def list_recent(self, limit: int) -> list[EvalRun]:
+        ordered = sorted(self.runs, key=lambda r: r.created_at, reverse=True)
+        return ordered[:limit]
+
+
+class FakeJudge:
+    """LLMProvider fake replaying queued completion texts in call order."""
+
+    def __init__(self, responses: list[str]) -> None:
+        self._responses = list(responses)
+        self.requests: list[CompletionRequest] = []
+
+    async def complete(self, request: CompletionRequest) -> CompletionResult:
+        self.requests.append(request)
+        return CompletionResult(
+            text=self._responses.pop(0),
+            usage=TokenUsage(prompt_tokens=10, completion_tokens=5),
+            model=ModelRef(provider="fake", name="judge"),
+        )
+
+    def stream(self, request: CompletionRequest) -> _NoStream:
+        raise NotImplementedError
+
+
+class _NoStream:
+    def __aiter__(self) -> _NoStream:
+        return self
+
+    async def __anext__(self) -> StreamEvent:
+        raise StopAsyncIteration
+
+
+EXAMPLES = (
+    GoldenExample(
+        id="ex1",
+        question="q1",
+        reference_answer="ref1",
+        source_files=("a.pdf",),
+        source_hints=("alpha",),
+    ),
+    GoldenExample(
+        id="ex2",
+        question="q2",
+        reference_answer="ref2",
+        source_files=("a.pdf", "b.pdf"),
+    ),
+)
+
+CONTEXTS = {
+    # ex1: rank 1 irrelevant, rank 2 hits a.pdf AND the "alpha" hint.
+    "q1": _context(_chunk("b.pdf"), _chunk("a.pdf", text="mentions ALPHA topic")),
+    # ex2 (cross-document): a.pdf found twice, b.pdf never → recall 0.5.
+    "q2": _context(_chunk("a.pdf"), _chunk("x.pdf"), _chunk("a.pdf")),
+}
+
+
+def _loader() -> tuple[GoldenExample, ...]:
+    return EXAMPLES
+
+
+def _retrieval_eval(
+    retrieve: FakeRetrieve, runs: InMemoryEvalRunRepository, k: int = 3
+) -> RunRetrievalEval:
+    return RunRetrievalEval(
+        retrieve=retrieve,  # type: ignore[arg-type]  # structural fake
+        runs=runs,
+        dataset_loader=_loader,
+        k=k,
+        dataset_version="golden_test",
+        config={"reranker": "none"},
+    )
+
+
+# ── RunRetrievalEval ─────────────────────────────────────────────────────────
+
+
+class TestRunRetrievalEval:
+    async def test_scores_hint_gated_and_cross_document_examples(self) -> None:
+        runs = InMemoryEvalRunRepository()
+        run = await _retrieval_eval(FakeRetrieve(CONTEXTS), runs)()
+        # ex1: recall 1.0 (a.pdf at rank 2), rr 0.5; ex2: recall 0.5, rr 1.0.
+        assert run.metrics["recall_at_k"] == pytest.approx(0.75)
+        assert run.metrics["mrr"] == pytest.approx(0.75)
+        assert run.metrics["examples"] == 2.0
+
+    async def test_persists_run_with_config_and_version(self) -> None:
+        runs = InMemoryEvalRunRepository()
+        run = await _retrieval_eval(FakeRetrieve(CONTEXTS), runs)()
+        assert runs.runs == [run]
+        assert run.dataset_version == "golden_test"
+        assert run.config == {"reranker": "none", "k": "3"}
+
+    async def test_call_time_k_overrides_default(self) -> None:
+        runs = InMemoryEvalRunRepository()
+        run = await _retrieval_eval(FakeRetrieve(CONTEXTS), runs)(k=1)
+        # k=1: ex1 top chunk is a miss (recall 0); ex2 finds a.pdf only (0.5).
+        assert run.metrics["recall_at_k"] == pytest.approx(0.25)
+        assert run.metrics["mrr"] == pytest.approx(0.5)
+        assert run.config["k"] == "1"
+
+    async def test_non_positive_k_rejected(self) -> None:
+        eval_run = _retrieval_eval(FakeRetrieve(CONTEXTS), InMemoryEvalRunRepository())
+        with pytest.raises(InvalidInputError):
+            await eval_run(k=0)
+
+    async def test_queries_use_the_golden_questions(self) -> None:
+        retrieve = FakeRetrieve(CONTEXTS)
+        await _retrieval_eval(retrieve, InMemoryEvalRunRepository())()
+        assert [q.text for q in retrieve.queries] == ["q1", "q2"]
+
+
+# ── RunJudgeEval ─────────────────────────────────────────────────────────────
+
+
+def _judge_eval(
+    judge: FakeJudge, retrieve: FakeRetrieve, runs: InMemoryEvalRunRepository
+) -> RunJudgeEval:
+    return RunJudgeEval(
+        judge=judge,
+        retrieve=retrieve,  # type: ignore[arg-type]  # structural fake
+        runs=runs,
+        dataset_loader=_loader,
+        dataset_version="golden_test",
+        config={"judge_model": "fake/judge"},
+    )
+
+
+def _verdict(faithfulness: float, relevancy: float) -> str:
+    return json.dumps(
+        {"faithfulness": faithfulness, "relevancy": relevancy, "reasoning": "because"}
+    )
+
+
+class TestRunJudgeEval:
+    async def test_aggregates_mean_scores_with_judge_suffix(self) -> None:
+        judge = FakeJudge([_verdict(0.8, 1.0), _verdict(0.9, 0.5)])
+        runs = InMemoryEvalRunRepository()
+        run = await _judge_eval(judge, FakeRetrieve(CONTEXTS), runs)()
+        assert run.dataset_version == "golden_test-judge"
+        assert run.metrics["faithfulness"] == pytest.approx(0.85)
+        assert run.metrics["relevancy"] == pytest.approx(0.75)
+        assert run.metrics["examples"] == 2.0
+        assert runs.runs == [run]
+
+    async def test_judge_prompt_carries_contexts_at_temperature_zero(self) -> None:
+        judge = FakeJudge([_verdict(1.0, 1.0), _verdict(1.0, 1.0)])
+        await _judge_eval(judge, FakeRetrieve(CONTEXTS), InMemoryEvalRunRepository())()
+        first = judge.requests[0]
+        assert first.temperature == 0.0
+        assert first.messages[0].role == "system"
+        assert "mentions ALPHA topic" in first.messages[1].content
+        assert "ref1" in first.messages[1].content
+
+    async def test_malformed_verdict_fails_run_and_persists_nothing(self) -> None:
+        judge = FakeJudge(["not json at all", _verdict(1.0, 1.0)])
+        runs = InMemoryEvalRunRepository()
+        with pytest.raises(InvalidInputError, match="ex1"):
+            await _judge_eval(judge, FakeRetrieve(CONTEXTS), runs)()
+        assert runs.runs == []
+
+    async def test_empty_dataset_rejected(self) -> None:
+        eval_run = RunJudgeEval(
+            judge=FakeJudge([]),
+            retrieve=FakeRetrieve(CONTEXTS),  # type: ignore[arg-type]
+            runs=InMemoryEvalRunRepository(),
+            dataset_loader=tuple,
+            dataset_version="golden_test",
+            config={},
+        )
+        with pytest.raises(InvalidInputError, match="empty"):
+            await eval_run()
+
+
+# ── ListEvalRuns ─────────────────────────────────────────────────────────────
+
+
+class TestListEvalRuns:
+    async def test_returns_recent_runs_up_to_limit(self) -> None:
+        runs = InMemoryEvalRunRepository()
+        produced = await _retrieval_eval(FakeRetrieve(CONTEXTS), runs)()
+        listed = await ListEvalRuns(runs=runs)(limit=1)
+        assert listed == [produced]
+
+    async def test_non_positive_limit_rejected(self) -> None:
+        with pytest.raises(InvalidInputError):
+            await ListEvalRuns(runs=InMemoryEvalRunRepository())(limit=0)
