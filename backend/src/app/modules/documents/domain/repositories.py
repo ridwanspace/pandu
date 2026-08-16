@@ -39,3 +39,15 @@ class ChunkRepository(Protocol):
     ) -> None: ...
 
     async def preview_for_document(self, document_id: UUID, *, limit: int = 20) -> list[Chunk]: ...
+
+    async def list_for_document(self, document_id: UUID) -> list[Chunk]:
+        """All chunks for a document, ordered by ``seq`` ascending."""
+        ...
+
+    async def update_embeddings(
+        self, document_id: UUID, embeddings: Sequence[tuple[float, ...]]
+    ) -> None:
+        """Replace embeddings in ``seq`` order (``embeddings[i]`` belongs to the
+        i-th chunk of :meth:`list_for_document`), leaving text untouched —
+        the embedding-model-migration path that avoids a full re-parse."""
+        ...

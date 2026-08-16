@@ -7,7 +7,7 @@ leaves the call path.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from google import genai
 from google.genai import errors as genai_errors
@@ -51,18 +51,23 @@ def map_gemini_error(exc: Exception, *, provider: str, model: str) -> ProviderEr
 
 def _split_messages(
     messages: Sequence[ChatMessage],
-) -> tuple[str | None, list[genai_types.Content]]:
+) -> tuple[str | None, genai_types.ContentListUnion]:
     """Gemini has no system role in ``contents``; system messages become the
     ``system_instruction`` and assistant turns map to role ``model``."""
     system_parts = [m.content for m in messages if m.role == "system"]
-    contents = [
-        genai_types.Content(
-            role="model" if m.role == "assistant" else "user",
-            parts=[genai_types.Part(text=m.content)],
-        )
-        for m in messages
-        if m.role != "system"
-    ]
+    # cast: the SDK union's list arm is list[Content | str | ...]; list
+    # invariance rejects a plain list[Content] even though it is valid input.
+    contents = cast(
+        "genai_types.ContentListUnion",
+        [
+            genai_types.Content(
+                role="model" if m.role == "assistant" else "user",
+                parts=[genai_types.Part(text=m.content)],
+            )
+            for m in messages
+            if m.role != "system"
+        ],
+    )
     return ("\n\n".join(system_parts) or None, contents)
 
 
@@ -161,10 +166,11 @@ class GeminiEmbeddingAdapter:
     async def embed_batch(self, texts: Sequence[str]) -> EmbeddingBatch:
         if not texts:
             return EmbeddingBatch(vectors=(), usage=TokenUsage(), model=self._model)
+        embed_contents = cast("genai_types.ContentListUnion", list(texts))
         try:
             response = await self._client.aio.models.embed_content(
                 model=self._model.name,
-                contents=list(texts),
+                contents=embed_contents,
                 config=genai_types.EmbedContentConfig(output_dimensionality=self._dimensions),
             )
         except Exception as exc:

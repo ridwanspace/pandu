@@ -22,7 +22,7 @@ from app.modules.documents.infrastructure.models import (
     DocumentBlobModel,
     DocumentModel,
 )
-from app.shared.domain.errors import NotFoundError
+from app.shared.domain.errors import InvalidInputError, NotFoundError
 
 SessionFactory = async_sessionmaker[AsyncSession]
 
@@ -111,6 +111,36 @@ class PostgresChunkRepository:
             )
             models = (await session.scalars(stmt)).all()
             return [_chunk_to_domain(m) for m in models]
+
+    async def list_for_document(self, document_id: UUID) -> list[Chunk]:
+        async with self._session_factory() as session:
+            stmt = (
+                select(ChunkModel)
+                .where(ChunkModel.document_id == document_id)
+                .order_by(ChunkModel.seq)
+            )
+            models = (await session.scalars(stmt)).all()
+            return [_chunk_to_domain(m) for m in models]
+
+    async def update_embeddings(
+        self, document_id: UUID, embeddings: Sequence[tuple[float, ...]]
+    ) -> None:
+        async with self._session_factory() as session, session.begin():
+            stmt = (
+                select(ChunkModel)
+                .where(ChunkModel.document_id == document_id)
+                .order_by(ChunkModel.seq)
+                .with_for_update()
+            )
+            models = (await session.scalars(stmt)).all()
+            if len(models) != len(embeddings):
+                msg = (
+                    f"embedding count {len(embeddings)} does not match "
+                    f"chunk count {len(models)} for document {document_id}"
+                )
+                raise InvalidInputError(msg)
+            for model, embedding in zip(models, embeddings, strict=True):
+                model.embedding = list(embedding)
 
 
 class PostgresBlobStore:

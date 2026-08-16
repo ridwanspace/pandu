@@ -79,6 +79,15 @@ class FakeChunkRepository:
     async def preview_for_document(self, document_id: UUID, *, limit: int = 20) -> list[Chunk]:
         return self.stored.get(document_id, [])[:limit]
 
+    async def list_for_document(self, document_id: UUID) -> list[Chunk]:
+        return list(self.stored.get(document_id, []))
+
+    async def update_embeddings(
+        self, document_id: UUID, embeddings: Sequence[tuple[float, ...]]
+    ) -> None:
+        assert len(embeddings) == len(self.stored.get(document_id, []))
+        self.embeddings[document_id] = list(embeddings)
+
 
 class FakeBlobStore:
     def __init__(self) -> None:

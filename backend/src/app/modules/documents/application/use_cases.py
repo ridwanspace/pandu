@@ -7,6 +7,7 @@ and ids, never document text (see logging policy in the architecture review).
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
@@ -223,4 +224,80 @@ class IngestDocument:
             "document_ingested",
             document_id=str(document.id),
             chunk_count=len(chunks),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ReembedReport:
+    """Outcome of an embedding-model migration pass."""
+
+    model: str
+    documents: int
+    chunks: int
+    skipped: int
+
+
+class ReembedDocuments:
+    """Re-embed stored chunk text with the currently configured embedding
+    provider — no re-parse, no re-chunk (chunk text lives in Postgres).
+
+    This is the cheap path for switching embedding models (e.g. the offline
+    ``hash/ngram`` bootstrap embedder -> a semantic API model): parsing a large
+    PDF costs tens of CPU-minutes, embedding the same chunks costs one API
+    call per batch. Only READY documents are touched; queries embed with the
+    same env-configured model, so run this once right after changing
+    ``AI_EMBED_MODEL`` to keep the vector space consistent.
+    """
+
+    def __init__(
+        self,
+        *,
+        documents: DocumentRepository,
+        chunks: ChunkRepository,
+        embedder: EmbeddingProvider,
+        embed_batch_size: int,
+    ) -> None:
+        self._documents = documents
+        self._chunks = chunks
+        self._embedder = embedder
+        self._embed_batch_size = embed_batch_size
+
+    async def __call__(self, document_id: UUID | None = None) -> ReembedReport:
+        if document_id is not None:
+            document = await self._documents.get(document_id)
+            if document is None:
+                msg = f"document {document_id} not found"
+                raise NotFoundError(msg)
+            candidates = [document]
+        else:
+            candidates = await self._documents.list_all()
+
+        model = ""
+        documents_done = 0
+        chunks_done = 0
+        skipped = 0
+        for document in candidates:
+            if document.status is not DocumentStatus.READY:
+                skipped += 1
+                continue
+            chunks = await self._chunks.list_for_document(document.id)
+            if not chunks:
+                skipped += 1
+                continue
+            vectors: list[tuple[float, ...]] = []
+            for start in range(0, len(chunks), self._embed_batch_size):
+                batch = chunks[start : start + self._embed_batch_size]
+                result = await self._embedder.embed_batch([chunk.text for chunk in batch])
+                vectors.extend(result.vectors)
+                model = str(result.model)
+            await self._chunks.update_embeddings(document.id, vectors)
+            documents_done += 1
+            chunks_done += len(chunks)
+            logger.info(
+                "document_reembedded",
+                document_id=str(document.id),
+                chunk_count=len(chunks),
+            )
+        return ReembedReport(
+            model=model, documents=documents_done, chunks=chunks_done, skipped=skipped
         )
