@@ -60,8 +60,23 @@ def parse_verdict(example_id: str, raw: str) -> JudgeVerdict:
     Accepts an optional markdown code fence around the JSON (a common LLM
     habit even when told not to); everything else is strict. Malformed output,
     non-numeric or out-of-range scores raise :class:`InvalidInputError`.
+
+    The empty-response case gets its own message because it has one dominant
+    cause and a non-obvious fix: reasoning models spend completion budget on
+    hidden thinking *before* emitting the answer, so a ``max_output_tokens``
+    that looks generous can be consumed entirely by reasoning, leaving no
+    verdict at all. Reported as "invalid JSON" it masquerades as judge
+    flakiness — and averaging repeated runs makes it worse, not better,
+    because every repeat truncates the same way.
     """
     text = _strip_code_fence(raw.strip())
+    if not text:
+        raise InvalidInputError(
+            f"judge verdict for {example_id!r}: the judge returned an empty response. "
+            "Reasoning models consume max_output_tokens on hidden reasoning before "
+            "emitting the verdict — raise max_output_tokens, or pin a judge that "
+            "does not reason."
+        )
     try:
         obj = json.loads(text)
     except json.JSONDecodeError as exc:

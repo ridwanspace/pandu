@@ -9,6 +9,7 @@ import pytest
 
 from app.modules.evaluation.application.use_cases import (
     ListEvalRuns,
+    RunAbstentionEval,
     RunJudgeEval,
     RunRetrievalEval,
 )
@@ -256,3 +257,242 @@ class TestListEvalRuns:
     async def test_non_positive_limit_rejected(self) -> None:
         with pytest.raises(InvalidInputError):
             await ListEvalRuns(runs=InMemoryEvalRunRepository())(limit=0)
+
+
+# ── Abstention ───────────────────────────────────────────────────────────────
+
+NEGATIVE = GoldenExample(
+    id="neg1",
+    question="q3",
+    reference_answer="the corpus does not cover this",
+    source_files=(),
+    answerable=False,
+)
+
+MIXED_EXAMPLES = (*EXAMPLES, NEGATIVE)
+MIXED_CONTEXTS = {**CONTEXTS, "q3": _context(_chunk("a.pdf", text="unrelated"))}
+
+
+def _mixed_loader() -> tuple[GoldenExample, ...]:
+    return MIXED_EXAMPLES
+
+
+def _abstention_eval(
+    answerer: FakeJudge, runs: InMemoryEvalRunRepository, loader: object = _mixed_loader
+) -> RunAbstentionEval:
+    return RunAbstentionEval(
+        answerer=answerer,  # type: ignore[arg-type]  # structural fake
+        retrieve=FakeRetrieve(MIXED_CONTEXTS),  # type: ignore[arg-type]
+        runs=runs,
+        dataset_loader=loader,  # type: ignore[arg-type]
+        dataset_version="golden_test",
+        config={"answer_model": "fake/model"},
+    )
+
+
+class TestRunAbstentionEval:
+    async def test_perfect_run_answers_positives_and_declines_negative(self) -> None:
+        runs = InMemoryEvalRunRepository()
+        answerer = FakeJudge(
+            [
+                "AAL2 needs two factors.",
+                "Audit retention is set by policy.",
+                "The context does not contain that information.",
+            ]
+        )
+        run = await _abstention_eval(answerer, runs)()
+        assert run.metrics["abstention_recall"] == 1.0
+        assert run.metrics["false_abstention_rate"] == 0.0
+        assert run.metrics["negatives"] == 1.0
+        assert run.metrics["positives"] == 2.0
+        assert run.dataset_version == "golden_test-abstention"
+        assert runs.runs == [run]
+
+    async def test_answering_a_negative_scores_zero_recall(self) -> None:
+        """The failure that matters: a confident answer to an unanswerable question."""
+        runs = InMemoryEvalRunRepository()
+        answerer = FakeJudge(["a1", "a2", "HIPAA requires safeguards for PHI."])
+        run = await _abstention_eval(answerer, runs)()
+        assert run.metrics["abstention_recall"] == 0.0
+
+    async def test_over_abstention_is_penalised_separately(self) -> None:
+        runs = InMemoryEvalRunRepository()
+        answerer = FakeJudge(
+            ["The context does not contain that.", "a2", "The context does not contain that."]
+        )
+        run = await _abstention_eval(answerer, runs)()
+        assert run.metrics["abstention_recall"] == 1.0
+        assert run.metrics["false_abstention_rate"] == 0.5
+
+    async def test_empty_dataset_rejected(self) -> None:
+        with pytest.raises(InvalidInputError, match="empty"):
+            await _abstention_eval(FakeJudge([]), InMemoryEvalRunRepository(), lambda: ())()
+
+    async def test_dataset_without_negatives_rejected(self) -> None:
+        """Only-answerable datasets make the metric vacuous — fail loudly instead."""
+        with pytest.raises(InvalidInputError, match="unanswerable"):
+            await _abstention_eval(FakeJudge([]), InMemoryEvalRunRepository(), _loader)()
+
+    async def test_prompt_carries_numbered_contexts_and_eval_tags(self) -> None:
+        runs = InMemoryEvalRunRepository()
+        answerer = FakeJudge(["a1", "a2", "does not contain"])
+        await _abstention_eval(answerer, runs)()
+        first = answerer.requests[0]
+        assert first.temperature == 0.0
+        assert first.tags == ("eval", "abstention")
+        assert "[1]" in first.messages[1].content
+        assert "Question: q1" in first.messages[1].content
+
+    async def test_empty_retrieval_is_reported_to_the_model(self) -> None:
+        runs = InMemoryEvalRunRepository()
+        answerer = FakeJudge(["does not contain"])
+        evaluator = RunAbstentionEval(
+            answerer=answerer,  # type: ignore[arg-type]
+            retrieve=FakeRetrieve({"q3": _context()}),  # type: ignore[arg-type]
+            runs=runs,
+            dataset_loader=lambda: (NEGATIVE,),
+            dataset_version="golden_test",
+            config={},
+        )
+        await evaluator()
+        assert "no passages were retrieved" in answerer.requests[0].messages[1].content
+
+
+class TestRetrievalEvalSkipsNegatives:
+    async def test_negatives_are_excluded_from_rank_metrics(self) -> None:
+        """Rank metrics are undefined without source files; negatives would
+        otherwise drag recall toward zero and make the gate meaningless."""
+        runs = InMemoryEvalRunRepository()
+        evaluator = RunRetrievalEval(
+            retrieve=FakeRetrieve(MIXED_CONTEXTS),  # type: ignore[arg-type]
+            runs=runs,
+            dataset_loader=_mixed_loader,
+            k=3,
+            dataset_version="golden_test",
+            config={},
+        )
+        run = await evaluator()
+        # Only the 2 answerable examples are scored, not all 3.
+        assert run.metrics["examples"] == 2.0
+
+    async def test_dataset_of_only_negatives_rejected(self) -> None:
+        runs = InMemoryEvalRunRepository()
+        evaluator = RunRetrievalEval(
+            retrieve=FakeRetrieve(MIXED_CONTEXTS),  # type: ignore[arg-type]
+            runs=runs,
+            dataset_loader=lambda: (NEGATIVE,),
+            k=3,
+            dataset_version="golden_test",
+            config={},
+        )
+        with pytest.raises(InvalidInputError, match="no answerable examples"):
+            await evaluator()
+
+
+class TestJudgeModelIsPinned:
+    async def test_resolved_judge_model_recorded_on_the_run(self) -> None:
+        """The judge is part of the eval's definition: the same suite can pass
+        under one judge and fail under another, so the run must record which
+        model actually produced the verdicts."""
+        runs = InMemoryEvalRunRepository()
+        judge = FakeJudge(['{"faithfulness": 1.0, "relevancy": 1.0, "reasoning": "ok"}'] * 2)
+        evaluator = RunJudgeEval(
+            judge=judge,  # type: ignore[arg-type]
+            retrieve=FakeRetrieve(CONTEXTS),  # type: ignore[arg-type]
+            runs=runs,
+            dataset_loader=_loader,
+            dataset_version="golden_test",
+            config={"judge_model": "requested/model"},
+        )
+        run = await evaluator()
+        # What was asked for, and what actually answered — both recorded.
+        assert run.config["judge_model"] == "requested/model"
+        assert run.config["judge_model_resolved"] == "fake/judge"
+
+
+class TestJudgeRetriesEmptyVerdicts:
+    """Reasoning models sometimes spend the whole token budget thinking and
+    return nothing. One retry covers that tail without averaging away real
+    disagreement."""
+
+    _VERDICT = '{"faithfulness": 1.0, "relevancy": 1.0, "reasoning": "ok"}'
+
+    async def test_empty_response_is_retried_once_and_succeeds(self) -> None:
+        runs = InMemoryEvalRunRepository()
+        # ex1 comes back empty first, then valid; ex2 is valid immediately.
+        judge = FakeJudge(["", self._VERDICT, self._VERDICT])
+        evaluator = RunJudgeEval(
+            judge=judge,  # type: ignore[arg-type]
+            retrieve=FakeRetrieve(CONTEXTS),  # type: ignore[arg-type]
+            runs=runs,
+            dataset_loader=_loader,
+            dataset_version="golden_test",
+            config={},
+        )
+        run = await evaluator()
+        assert run.metrics["examples"] == 2.0
+        assert len(judge.requests) == 3, "the empty verdict should cost one extra call"
+
+    async def test_two_empty_responses_still_fail_loudly(self) -> None:
+        """A retry must not become a way to paper over a truncating judge."""
+        judge = FakeJudge(["", ""])
+        evaluator = RunJudgeEval(
+            judge=judge,  # type: ignore[arg-type]
+            retrieve=FakeRetrieve(CONTEXTS),  # type: ignore[arg-type]
+            runs=InMemoryEvalRunRepository(),
+            dataset_loader=_loader,
+            dataset_version="golden_test",
+            config={},
+        )
+        with pytest.raises(InvalidInputError, match="empty response"):
+            await evaluator()
+
+    async def test_a_valid_verdict_is_never_retried(self) -> None:
+        """Only the empty case retries — verdicts are not sampled or averaged."""
+        judge = FakeJudge([self._VERDICT, self._VERDICT])
+        evaluator = RunJudgeEval(
+            judge=judge,  # type: ignore[arg-type]
+            retrieve=FakeRetrieve(CONTEXTS),  # type: ignore[arg-type]
+            runs=InMemoryEvalRunRepository(),
+            dataset_loader=_loader,
+            dataset_version="golden_test",
+            config={},
+        )
+        await evaluator()
+        assert len(judge.requests) == 2
+
+
+class TestJudgeEvalSkipsNegatives:
+    """The judge rubric asks whether the reference answer's claims are supported
+    by the retrieved passages. A negative's reference answer is a refusal, so
+    the question is not well-posed — measured, the judge returned
+    0.0/1.0/0.0/1.0/1.0 on the five negatives, which is noise in the mean."""
+
+    _VERDICT = '{"faithfulness": 1.0, "relevancy": 1.0, "reasoning": "ok"}'
+
+    async def test_negatives_are_not_judged(self) -> None:
+        runs = InMemoryEvalRunRepository()
+        judge = FakeJudge([self._VERDICT, self._VERDICT])  # only 2, not 3
+        evaluator = RunJudgeEval(
+            judge=judge,  # type: ignore[arg-type]
+            retrieve=FakeRetrieve(MIXED_CONTEXTS),  # type: ignore[arg-type]
+            runs=runs,
+            dataset_loader=_mixed_loader,
+            dataset_version="golden_test",
+            config={},
+        )
+        run = await evaluator()
+        assert run.metrics["examples"] == 2.0
+        assert len(judge.requests) == 2, "the negative must never reach the judge"
+
+    async def test_dataset_of_only_negatives_rejected(self) -> None:
+        evaluator = RunJudgeEval(
+            judge=FakeJudge([]),  # type: ignore[arg-type]
+            retrieve=FakeRetrieve(MIXED_CONTEXTS),  # type: ignore[arg-type]
+            runs=InMemoryEvalRunRepository(),
+            dataset_loader=lambda: (NEGATIVE,),
+            dataset_version="golden_test",
+            config={},
+        )
+        with pytest.raises(InvalidInputError, match="no answerable examples"):
+            await evaluator()

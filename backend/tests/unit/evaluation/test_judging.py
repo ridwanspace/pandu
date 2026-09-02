@@ -78,3 +78,22 @@ class TestParseVerdict:
     def test_out_of_range_score_rejected(self, value: str) -> None:
         with pytest.raises(InvalidInputError, match="within"):
             parse_verdict("q1", f'{{"faithfulness": {value}, "relevancy": 0.5}}')
+
+
+class TestEmptyJudgeResponse:
+    """A reasoning model can spend its whole token budget thinking and emit
+    nothing. That has a specific fix (raise the budget), so it gets a specific
+    message rather than being lumped in with malformed JSON."""
+
+    def test_empty_response_names_the_token_budget_cause(self) -> None:
+        with pytest.raises(InvalidInputError, match="max_output_tokens"):
+            parse_verdict("ex1", "")
+
+    def test_whitespace_only_response_treated_the_same(self) -> None:
+        with pytest.raises(InvalidInputError, match="empty response"):
+            parse_verdict("ex1", "   \n\t  ")
+
+    def test_malformed_json_still_reports_invalid_json(self) -> None:
+        """The generic path must not be swallowed by the empty-response check."""
+        with pytest.raises(InvalidInputError, match="invalid JSON"):
+            parse_verdict("ex1", "{not json")
