@@ -26,6 +26,14 @@ from app.shared.domain.ports.llm import (
 )
 from app.shared.domain.values import ModelRef, TokenUsage
 
+# The OpenAI SDK falls back to the ambient ``OPENAI_BASE_URL`` env var whenever
+# ``base_url`` is None. On a developer machine that exports it for an unrelated
+# gateway, an ``openai/...`` model ref would then silently route the configured
+# key to a third party -- no error, no log line. Pinning the official endpoint
+# here makes ``openai/...`` mean OpenAI, always; deliberate redirection is what
+# the ``compat/...`` provider is for (ADR-001).
+OPENAI_API_BASE_URL = "https://api.openai.com/v1"
+
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Sequence
 
@@ -86,7 +94,9 @@ class OpenAIChatAdapter:
         use_max_completion_tokens: bool = True,
     ) -> None:
         self._model = model
-        self._client = client or AsyncOpenAI(api_key=api_key, base_url=base_url)
+        self._client = client or AsyncOpenAI(
+            api_key=api_key, base_url=base_url or OPENAI_API_BASE_URL
+        )
         self._use_max_completion_tokens = use_max_completion_tokens
 
     @property
@@ -171,7 +181,9 @@ class OpenAIEmbeddingAdapter:
     ) -> None:
         self._model = model
         self._dimensions = dimensions
-        self._client = client or AsyncOpenAI(api_key=api_key, base_url=base_url)
+        self._client = client or AsyncOpenAI(
+            api_key=api_key, base_url=base_url or OPENAI_API_BASE_URL
+        )
         self._send_dimensions = send_dimensions
 
     @property

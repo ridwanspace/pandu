@@ -9,9 +9,11 @@ import pytest
 
 from app.config import Settings
 from app.shared.domain.errors import InvalidInputError
+from app.shared.domain.values import ModelRef
 from app.shared.infrastructure.ai.factory import ProviderFactory
 from app.shared.infrastructure.ai.gemini_adapter import GeminiChatAdapter, GeminiEmbeddingAdapter
 from app.shared.infrastructure.ai.openai_adapter import (
+    OPENAI_API_BASE_URL,
     OpenAIChatAdapter,
     OpenAIEmbeddingAdapter,
 )
@@ -143,3 +145,34 @@ class TestBuildReranker:
     def test_unknown_kind(self) -> None:
         with pytest.raises(InvalidInputError, match="unknown reranker"):
             ProviderFactory(make_settings()).build_reranker("bm25")
+
+
+class TestOpenAIBaseUrlPinning:
+    """``openai/...`` must always mean OpenAI, never an ambient env override.
+
+    The SDK reads ``OPENAI_BASE_URL`` from the process environment when
+    ``base_url`` is None, so a developer machine exporting it for another
+    gateway would silently ship the configured API key to a third party.
+    Redirection is the ``compat/...`` provider's job (ADR-001).
+    """
+
+    def test_chat_adapter_ignores_ambient_base_url(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OPENAI_BASE_URL", "https://not-openai.example/v1")
+        adapter = OpenAIChatAdapter(model=ModelRef.parse("openai/gpt-4o-mini"), api_key="k")
+        assert str(adapter._client.base_url).rstrip("/") == OPENAI_API_BASE_URL
+
+    def test_embedding_adapter_ignores_ambient_base_url(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("OPENAI_BASE_URL", "https://not-openai.example/v1")
+        adapter = OpenAIEmbeddingAdapter(
+            model=ModelRef.parse("openai/text-embedding-3-small"), api_key="k", dimensions=1536
+        )
+        assert str(adapter._client.base_url).rstrip("/") == OPENAI_API_BASE_URL
+
+    def test_explicit_base_url_still_wins(self) -> None:
+        """The ``compat`` provider passes base_url explicitly; that must work."""
+        adapter = OpenAIChatAdapter(
+            model=ModelRef.parse("compat/local"), api_key="k", base_url="http://localhost:11434/v1"
+        )
+        assert str(adapter._client.base_url).rstrip("/") == "http://localhost:11434/v1"
