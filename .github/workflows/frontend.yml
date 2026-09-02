@@ -28,8 +28,13 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Lint + format (biome)
         run: pnpm exec biome ci .
+      # Runs `next typegen && tsc`. .next/types (LayoutProps, PageProps,
+      # route literals) is generated and gitignored, so a clean checkout has
+      # none of it and a bare tsc fails on types that resolve fine locally,
+      # where a dev server has already written them. The script owns that
+      # ordering so CI and a fresh clone typecheck identically.
       - name: Types
-        run: pnpm exec tsc --noEmit
+        run: pnpm typecheck
       - name: Unit tests
         run: pnpm exec vitest run
       - name: Build
