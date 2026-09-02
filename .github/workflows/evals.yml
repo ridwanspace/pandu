@@ -43,8 +43,18 @@ jobs:
       - name: Fetch corpus
         working-directory: .
         run: bash scripts/fetch_corpus.sh
-      - name: Migrate + ingest corpus + run eval suite
+      - name: Migrate + ingest corpus
         run: |
           uv run alembic upgrade head
-          uv run python -m evals.run --retrieval-only
+          uv run python -m evals.ingest_corpus
+      - name: Run eval suite
+        # --compare diffs against the previous stored run and fails on any
+        # per-metric regression, even when every absolute threshold passes: a
+        # mean can hold steady while some examples break and others improve.
+        run: uv run python -m evals.run --retrieval-only --compare
         # Thresholds are enforced inside evals.run (tightening-only rule; ADR-008).
+      - name: Retrieval configuration sweep (evidence for ADR-010)
+        # Reported, never gated: this quantifies what each arm and the
+        # reranker buy, which is a measurement, not a pass/fail claim.
+        continue-on-error: true
+        run: uv run python -m evals.sweep --arms hybrid,dense,lexical --k 1,3,5,10

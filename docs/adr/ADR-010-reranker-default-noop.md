@@ -1,6 +1,23 @@
 # ADR-010: Reranker defaults to no-op, opt-in by config
 
-**Status:** Accepted 2026-08-16
+**Status:** Accepted 2026-08-16 · **measured 2026-09-02** — the evaluation
+promised below now exists (`evals/sweep.py`), and it *supports* the default:
+
+| Configuration | recall@5 | precision@5 | MRR | nDCG@5 | latency |
+|---|---|---|---|---|---|
+| hybrid, no reranker | **0.967** | **0.760** | 0.889 | **0.897** | 602 ms |
+| hybrid + Cohere `rerank-v3.5` | 0.933 | 0.733 | **0.922** | 0.892 | 1803 ms |
+| hybrid + Jina `v2-base-multilingual` | 0.900 | 0.667 | 0.822 | 0.814 | 1692 ms |
+
+Both hosted rerankers *lowered* aggregate quality on the NIST golden set
+while adding ~1.2 s per query. Cohere did sharpen the top position (MRR
+0.889 → 0.922), which is the one thing a cross-encoder is supposed to do —
+but it lost recall and precision doing it, because reranking 20 fused
+candidates down to 5 discards evidence that cross-document questions need.
+
+The decision below was made on onboarding-friction grounds before any of
+this was measured. It happens to be correct, and is now correct for a
+reason. The `noop` default stays.
 
 ## Context
 

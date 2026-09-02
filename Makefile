@@ -1,4 +1,4 @@
-.PHONY: help infra dev api worker web up down observability test lint type arch unit integration contract coverage evals migrate fmt
+.PHONY: help infra dev api worker web up down observability test lint type arch unit integration contract coverage evals evals-retrieval evals-abstention evals-ingest sweep migrate fmt
 
 help: ## Show targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -65,3 +65,15 @@ migrate: ## Apply migrations
 
 evals: ## Retrieval metrics + ragas suite on the golden dataset (costs tokens)
 	cd backend && uv run --group eval python -m evals.run
+
+evals-ingest: ## Load the seed corpus into Postgres (needed before any eval run)
+	cd backend && uv run python -m evals.ingest_corpus
+
+evals-retrieval: ## LLM-free rank metrics only (recall/precision/MRR/nDCG) + regression diff
+	cd backend && uv run python -m evals.run --retrieval-only --compare
+
+evals-abstention: ## Does the system decline when the corpus cannot answer? (costs tokens)
+	cd backend && uv run python -m evals.run --retrieval-only --abstention
+
+sweep: ## Measure hybrid vs dense vs lexical, and rerank on/off (ADR-010 evidence)
+	cd backend && uv run python -m evals.sweep --arms hybrid,dense,lexical --k 1,3,5,10

@@ -23,7 +23,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from app.config import Settings, get_settings
-from app.modules.evaluation.application.use_cases import RunJudgeEval, RunRetrievalEval
+from app.modules.evaluation.application.use_cases import (
+    RunAbstentionEval,
+    RunJudgeEval,
+    RunRetrievalEval,
+)
+from app.modules.evaluation.domain.diffing import RunDiff, diff_runs
 from app.modules.evaluation.infrastructure.dataset_files import golden_dataset_loader
 from app.modules.evaluation.infrastructure.repositories import PostgresEvalRunRepository
 from app.modules.retrieval.application.use_cases import RetrieveContext
@@ -40,12 +45,16 @@ if TYPE_CHECKING:
 # These floors may only ever be RAISED, never lowered. If a change drops a
 # metric below its floor, fix the pipeline or consciously revert the change;
 # loosening a gate to make CI green defeats the point of having one.
-RECALL_AT_K_MIN = 0.60  # retrieval recall@5 over golden_v1
+RECALL_AT_K_MIN = 0.60  # retrieval recall@5 over the golden set
 FAITHFULNESS_MIN = 0.85  # LLM-judge / ragas faithfulness
 CONTEXT_PRECISION_MIN = 0.75  # ragas context precision
+ABSTENTION_RECALL_MIN = 0.60  # fraction of negatives correctly declined
 
-GOLDEN_PATH = Path(__file__).resolve().parent / "golden" / "golden_v1.jsonl"
-DATASET_VERSION = "golden_v1"
+# golden_v2 = the 15 answerable examples of v1 plus 5 negatives. Scores are
+# only comparable within one dataset version, so the version is recorded on
+# every run (see evals/golden/README.md).
+GOLDEN_PATH = Path(__file__).resolve().parent / "golden" / "golden_v2.jsonl"
+DATASET_VERSION = "golden_v2"
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -59,11 +68,24 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="skip the LLM-as-judge run (retrieval metrics are LLM-free)",
     )
     parser.add_argument(
+        "--abstention",
+        action="store_true",
+        help="also run the abstention eval (generates one answer per example)",
+    )
+    parser.add_argument(
         "--ragas",
         action="store_true",
         help="also run the ragas generation-metric suite (requires --group eval)",
     )
     parser.add_argument("--k", type=int, default=5, help="recall horizon (default: 5)")
+    parser.add_argument(
+        "--compare",
+        action="store_true",
+        help=(
+            "diff this run against the most recent stored run of the same kind "
+            "and FAIL on any per-metric regression, even when every threshold passes"
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -79,6 +101,54 @@ def _gate(name: str, value: float, minimum: float, failures: list[str]) -> None:
     print(f"  {name:<24}{value:>10.4f}  >= {minimum:.2f}  {'PASS' if passed else 'FAIL'}")
     if not passed:
         failures.append(name)
+
+
+def _print_diff(title: str, diff: RunDiff, failures: list[str]) -> None:
+    """Report per-metric movement and fail on any regression.
+
+    A mean can hold steady while some examples break and others improve, so a
+    threshold gate alone cannot see a swap. This is the check that can.
+    """
+    print(f"\n{title}")
+    if not diff.deltas:
+        print("  (no comparable baseline metrics)")
+    for delta in diff.deltas:
+        arrow = {"improved": "+", "regressed": "-", "unchanged": "="}[delta.direction.value]
+        print(
+            f"  {arrow} {delta.name:<24}{delta.baseline:>9.4f} -> {delta.current:>9.4f}"
+            f"  ({delta.delta:+.4f})"
+        )
+    if diff.added:
+        print(f"  new metrics: {', '.join(diff.added)}")
+    if diff.removed:
+        print(f"  dropped metrics: {', '.join(diff.removed)}")
+    if diff.has_regression:
+        names = ", ".join(d.name for d in diff.regressions)
+        print(f"  REGRESSION: {names}")
+        failures.append(f"regression in {names}")
+
+
+async def _compare_with_previous(
+    runs: PostgresEvalRunRepository, current: EvalRun, failures: list[str]
+) -> None:
+    """Diff *current* against the most recent earlier run of the same version."""
+    history = await runs.list_recent(50)
+    baseline = next(
+        (
+            run
+            for run in history
+            if run.dataset_version == current.dataset_version and run.id != current.id
+        ),
+        None,
+    )
+    if baseline is None:
+        print(f"\nNo baseline yet for {current.dataset_version} — this run becomes the baseline.")
+        return
+    _print_diff(
+        f"Diff vs {baseline.created_at:%Y-%m-%d %H:%M} ({current.dataset_version})",
+        diff_runs(baseline.metrics, current.metrics),
+        failures,
+    )
 
 
 def _build_retrieve(
@@ -126,6 +196,8 @@ async def _amain(args: argparse.Namespace) -> int:
         _print_metrics(f"Retrieval metrics ({DATASET_VERSION}, k={args.k})", retrieval_run.metrics)
         print("\nGates (tightening-only):")
         _gate(f"recall@{args.k}", retrieval_run.metrics["recall_at_k"], RECALL_AT_K_MIN, failures)
+        if args.compare:
+            await _compare_with_previous(runs, retrieval_run, failures)
 
         if not args.retrieval_only:
             judge_model = settings.ai_judge_model or settings.ai_chat_model
@@ -137,14 +209,40 @@ async def _amain(args: argparse.Namespace) -> int:
                 dataset_version=DATASET_VERSION,
                 config={**config, "judge_model": judge_model},
                 # Reasoning models (e.g. deepseek-v4-*) spend completion budget
-                # on hidden reasoning before emitting the JSON verdict; a tight
-                # cap truncates the JSON mid-object.
-                max_output_tokens=2048,
+                # on hidden reasoning BEFORE emitting the JSON verdict. Measured
+                # 2026-09-02: with real retrieved context, deepseek-v4-flash
+                # consumed all 2048 tokens on reasoning and returned an empty
+                # string — no verdict at all. 8192 leaves room for both.
+                max_output_tokens=8192,
             )
             judge_run = await judge_eval()
             _print_metrics(f"Judge metrics ({judge_run.dataset_version})", judge_run.metrics)
             print("\nGates (tightening-only):")
             _gate("faithfulness", judge_run.metrics["faithfulness"], FAITHFULNESS_MIN, failures)
+            if args.compare:
+                await _compare_with_previous(runs, judge_run, failures)
+
+        if args.abstention:
+            answer_model = settings.ai_chat_model
+            abstention_eval = RunAbstentionEval(
+                answerer=factory.build_llm(answer_model),
+                retrieve=retrieve,
+                runs=runs,
+                dataset_loader=loader,
+                dataset_version=DATASET_VERSION,
+                config={**config, "answer_model": answer_model},
+            )
+            abstention_run = await abstention_eval()
+            _print_metrics(
+                f"Abstention metrics ({abstention_run.dataset_version})", abstention_run.metrics
+            )
+            print("\nGates (tightening-only):")
+            _gate(
+                "abstention_recall",
+                abstention_run.metrics["abstention_recall"],
+                ABSTENTION_RECALL_MIN,
+                failures,
+            )
 
         if args.ragas:
             from evals.ragas_runner import run_ragas
