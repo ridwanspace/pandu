@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -49,6 +50,7 @@ from app.modules.evaluation.presentation.controllers import (
     build_router as build_evals_router,
 )
 from app.modules.retrieval.application.use_cases import RetrieveContext
+from app.modules.retrieval.domain.search_index import SearchIndex
 from app.modules.retrieval.infrastructure.pg_search_index import PostgresSearchIndex
 from app.modules.retrieval.presentation.controllers import (
     build_router as build_retrieval_router,
@@ -77,6 +79,9 @@ from app.shared.presentation.costs import get_cost_stats_reader
 from app.shared.presentation.costs import router as costs_router
 from app.shared.presentation.security_headers import SecurityHeadersMiddleware
 
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
 GOLDEN_DATASET = Path(__file__).resolve().parents[2] / "evals" / "golden" / "golden_v1.jsonl"
 
 
@@ -88,6 +93,26 @@ def _build_tracer(settings: Settings) -> Tracer:
             host=settings.langfuse_host,
         )
     return NoopTracer()
+
+
+def _build_search_index(
+    settings: Settings, session_factory: async_sessionmaker[AsyncSession]
+) -> SearchIndex:
+    """ADR-002: Postgres is the default and the measured baseline. ``qdrant``
+    swaps ONLY the dense arm — Postgres FTS stays the lexical delegate, because
+    Qdrant's core API has no BM25. The import is local so the base image (which
+    lacks the ``qdrant`` extra) never touches the module."""
+    postgres = PostgresSearchIndex(session_factory)
+    if settings.search_index == "pg":
+        return postgres
+    from app.modules.retrieval.infrastructure.qdrant_search_index import QdrantSearchIndex
+
+    return QdrantSearchIndex(
+        lexical_delegate=postgres,
+        collection=settings.qdrant_collection,
+        url=settings.qdrant_url,
+        api_key=settings.qdrant_api_key,
+    )
 
 
 def _build_llm(
@@ -140,7 +165,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # ── Use cases ────────────────────────────────────────────────────────
     retrieve = RetrieveContext(
         embedder=embedder,
-        index=PostgresSearchIndex(session_factory),
+        index=_build_search_index(settings, session_factory),
         reranker=reranker,
         tracer=tracer,
         candidates=settings.retrieval_candidates,

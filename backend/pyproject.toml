@@ -33,6 +33,9 @@ parsing = ["docling>=2.15"]
 rerank-local = ["sentence-transformers>=3.3"]
 # Langfuse tracing adapter — the app runs fine without it (no-op tracer).
 observability = ["langfuse>=2.57"]
+# Optional Qdrant dense-search adapter (ADR-002 scale-out path). Default is
+# SEARCH_INDEX=pg; without this extra the Qdrant adapter is never imported.
+qdrant = ["qdrant-client>=1.12"]
 
 [dependency-groups]
 dev = [
@@ -95,7 +98,7 @@ no_implicit_reexport = true
 exclude = "(^\\.venv/|^build/|^dist/|^migrations/)"
 
 [[tool.mypy.overrides]]
-module = ["docling.*", "sentence_transformers.*", "langfuse.*", "arq.*", "testcontainers.*", "ragas.*", "datasets.*"]
+module = ["docling.*", "sentence_transformers.*", "langfuse.*", "arq.*", "testcontainers.*", "ragas.*", "datasets.*", "qdrant_client.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

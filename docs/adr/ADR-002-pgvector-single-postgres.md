@@ -1,6 +1,11 @@
 # ADR-002: One Postgres for everything — pgvector + FTS behind a SearchIndex port
 
-**Status:** Accepted 2026-08-16
+**Status:** Accepted 2026-08-16 · amended by
+[ADR-013](ADR-013-optional-qdrant-adapter.md) (2026-09-02): the Qdrant adapter
+described below as a documented-but-unbuilt path now **exists and ships off by
+default**, so the "swap is an adapter, not a rewrite" claim is demonstrated
+rather than asserted. The decision — one Postgres for everything — is
+unchanged.
 
 ## Context
 
@@ -36,9 +41,20 @@ layer.
 - **Honest caveat:** Postgres FTS is BM25-*like*, not BM25.
   `ts_rank_cd` has no term-saturation or document-length normalization the
   way true BM25 does, so lexical rankings will differ from an Elasticsearch
-  or Tantivy baseline. For this corpus and a fused pipeline (RRF only
-  consumes ranks, not scores) the difference is marginal — but we say
-  "BM25-like" in the docs, not "BM25".
+  or Tantivy baseline. We say "BM25-like" in the docs, not "BM25".
+
+  **Measured 2026-09-02, and the caveat is larger than "marginal".** On the
+  NIST golden set the lexical arm alone scores nDCG@5 **0.267** against dense
+  alone at **0.906**, and hybrid+RRF (0.897) therefore lands *slightly below*
+  dense alone — RRF weights both arms equally, so a weak leg costs rather
+  than adds. On 500-page control catalogs, where query terms recur in
+  hundreds of chunks, the missing saturation and length normalisation bite
+  hard. Hybrid remains the default because the lexical arm's value is
+  categorical (exact identifiers like `AU-11`, `AC-2`, `AAL2` are what dense
+  retrieval misses and what compliance questions are built from) and the gap
+  is 0.009 nDCG on 15 examples — but this is now a **defensible judgement
+  call, not a measured win**, and the exact-BM25 upgrade path below is
+  correspondingly more attractive than it looked.
 - Scale-out path is documented, not built: exact BM25 via ParadeDB
   `pg_search`, or a Qdrant adapter behind the same `SearchIndex` port (with
   server-side hybrid search) when the vector count or QPS outgrows a single

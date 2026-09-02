@@ -58,7 +58,17 @@ class Settings(BaseSettings):
     reranker: str = Field(default="none", pattern="^(none|cohere|jina|local)$")
     local_reranker_model: str = "BAAI/bge-reranker-v2-m3"
 
+    # ── Search index backend (ADR-002: "pg" is the default and the baseline) ─
+    # "qdrant" swaps ONLY the dense arm; lexical stays on Postgres FTS.
+    search_index: str = Field(default="pg", pattern="^(pg|qdrant)$")
+    qdrant_url: str = "http://localhost:6333"
+    qdrant_api_key: str = ""
+    qdrant_collection: str = "pandu_chunks"
+
     # ── Ingestion ────────────────────────────────────────────────────────
+    # Docling runs OCR over every page by default; for text-layer PDFs that is
+    # pure cost for identical text. Enable only for scanned/image-only sources.
+    docling_ocr: bool = False
     chunk_max_tokens: int = 512
     chunk_overlap_tokens: int = 64
     embed_batch_size: int = 64
