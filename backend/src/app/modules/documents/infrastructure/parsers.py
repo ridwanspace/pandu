@@ -137,10 +137,19 @@ class PlainTextParser:
 
 
 class DoclingParser:
-    """PDF parsing via Docling, imported lazily (optional heavy extra)."""
+    """PDF parsing via Docling, imported lazily (optional heavy extra).
 
-    def __init__(self) -> None:
+    ``ocr`` defaults to **off**. Docling's default pipeline runs OCR over every
+    page, which for a PDF that already has a text layer is pure cost: on the
+    NIST seed corpus it turns a parse measured in seconds into one measured in
+    tens of minutes and adds nothing, because the extracted text is identical.
+    Scanned or image-only PDFs genuinely need it, so it stays available —
+    ``DOCLING_OCR=true`` — rather than being removed.
+    """
+
+    def __init__(self, *, ocr: bool = False) -> None:
         self._converter: Any = None
+        self._ocr = ocr
 
     def supports(self, content_type: str, filename: str) -> bool:
         return content_type == "application/pdf" or filename.lower().endswith(".pdf")
@@ -164,8 +173,25 @@ class DoclingParser:
             )
             raise InvalidInputError(msg) from exc
         if self._converter is None:
-            self._converter = DocumentConverter()
+            self._converter = self._build_converter(DocumentConverter)
         return self._converter, DocumentStream
+
+    def _build_converter(self, document_converter: Any) -> Any:
+        """Converter with OCR under our control rather than Docling's default.
+
+        Table structure recognition stays ON: the corpus is control catalogs,
+        and the tables are the content.
+        """
+        from docling.datamodel.base_models import InputFormat
+        from docling.datamodel.pipeline_options import PdfPipelineOptions
+        from docling.document_converter import PdfFormatOption
+
+        options = PdfPipelineOptions()
+        options.do_ocr = self._ocr
+        options.do_table_structure = True
+        return document_converter(
+            format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=options)}
+        )
 
     def _map_items(self, document: Any) -> list[ParsedBlock]:
         blocks: list[ParsedBlock] = []
@@ -235,6 +261,9 @@ class CompositeParser:
         raise InvalidInputError(f"no parser supports content type {content_type!r}")
 
 
-def build_default_parser() -> DocumentParser:
-    """Docling for PDFs, built-in text parser for txt/markdown."""
-    return CompositeParser((DoclingParser(), PlainTextParser()))
+def build_default_parser(*, ocr: bool = False) -> DocumentParser:
+    """Docling for PDFs, built-in text parser for txt/markdown.
+
+    ``ocr`` is off by default — see :class:`DoclingParser`.
+    """
+    return CompositeParser((DoclingParser(ocr=ocr), PlainTextParser()))

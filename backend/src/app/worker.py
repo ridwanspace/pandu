@@ -47,7 +47,7 @@ async def startup(ctx: dict[Any, Any]) -> None:
         documents=PostgresDocumentRepository(session_factory),
         chunks=PostgresChunkRepository(session_factory),
         blobs=PostgresBlobStore(session_factory),
-        parser=build_default_parser(),
+        parser=build_default_parser(ocr=settings.docling_ocr),
         embedder=embedder,
         count_tokens=build_token_counter(),
         chunk_max_tokens=settings.chunk_max_tokens,
