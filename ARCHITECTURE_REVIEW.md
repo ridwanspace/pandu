@@ -287,7 +287,11 @@ Eval thresholds start permissive and ratchet up — a *tightening-only* rule, st
 - **ragas** for batch RAG metrics (faithfulness, answer relevancy, context precision/recall) — the published-methodology standard; runs nightly in CI and on a `run-evals` PR label.
 - **LLM-as-judge** (pydantic-ai, judge model env-switchable) for answer-quality rubric scoring — mirrors your 0.92-faithfulness CV story.
 - **Langfuse (self-hosted)** for tracing: every chat request becomes a trace with retrieval spans (candidate sets, RRF ranks, rerank scores), generation span, token usage, and cost. Eval scores are written back to traces. Runs as an **optional compose profile** because Langfuse v3 needs ClickHouse + Redis + MinIO — the app must run fine without it (no-op tracer adapter).
-- **Retrieval-only metrics** (recall@k, MRR against the golden set) run *without* any LLM — cheap, deterministic, and shows you know retrieval evaluation ≠ generation evaluation.
+- **Retrieval-only metrics** (recall@k, precision@k, hit-rate@k, MRR, nDCG@k against the golden set) run *without* any LLM — cheap, deterministic, and shows you know retrieval evaluation ≠ generation evaluation. Reported at k = 1/3/5/10: the recall@1-vs-recall@5 gap is the specific signal that says "retrieval finds it but ranks it badly", which is when reranking pays ([ADR-012](docs/adr/ADR-012-retrieval-metrics-and-regression-diffing.md)).
+- **Abstention** is a measured output, not a prompt instruction. The golden set carries **negatives** — questions the corpus genuinely cannot answer — and the eval reports two error directions separately: `abstention_recall` and `false_abstention_rate`. Without negatives, a system that answers everything confidently scores identically to one that declines correctly ([ADR-011](docs/adr/ADR-011-abstention-as-a-measured-output.md)).
+- **Regression diffing**: `--compare` diffs a run against the previous stored run of the same dataset version and fails on any per-metric regression, *independent of the absolute thresholds*. A mean can hold steady while some examples break and others improve — the aggregate lies, the diff does not.
+- **Configuration sweep** (`evals/sweep.py`): hybrid vs dense-only vs lexical-only, rerank on/off, across k. This is what turns ADR-010's reranker toggle from a claim into a number, and it is the harness that can show fusion making things *worse* — RRF weights both arms equally, so a strong embedder paired with a weak lexical arm can score worse fused than dense alone.
+- **Citation validity** is checked deterministically, not prompted for: markers in the answer must be a subset of the retrieved contexts, and violations are counted onto the trace ([ADR-014](docs/adr/ADR-014-citation-validation-is-code.md)).
 - **App telemetry**: structured JSON logging (structlog), request IDs, OpenTelemetry instrumentation on FastAPI + SQLAlchemy (exportable to any OTLP backend).
 
 ---
@@ -385,4 +389,38 @@ Each phase = one PR train with the full gate — the git history itself becomes 
 
 ## 13. Open items
 
-**All resolved (2026-08-16)** — see the decision log (§9, #1–#10). The blueprint was approved and implemented the same day: phases 0–3 plus the hardening test suites are in the tree (backend modules, shared AI seam, frontend, ADRs 1–10, CI with layered coverage + architecture contracts, integration/contract suites). The Langfuse compose profile (self-hosted v3 on ClickHouse) was wired and verified end-to-end the same day — a chat request produces a `chat.ask` trace with retrieval span timings, metrics-only metadata. Remaining from the roadmap (§10): Playwright e2e runs against a keyed stack, and the roadmap-proper items (multi-tenancy, Qdrant adapter, query decomposition, GraphRAG, Cloud Run guide).
+**All resolved (2026-08-16)** — see the decision log (§9, #1–#10). The blueprint was approved and implemented the same day: phases 0–3 plus the hardening test suites are in the tree (backend modules, shared AI seam, frontend, ADRs 1–10, CI with layered coverage + architecture contracts, integration/contract suites). The Langfuse compose profile (self-hosted v3 on ClickHouse) was wired and verified end-to-end the same day — a chat request produces a `chat.ask` trace with retrieval span timings, metrics-only metadata. **Evaluation hardening (2026-09-02).** A second pass closed the gaps that a
+single aggregate score was hiding:
+
+- Rank metrics expanded beyond recall@k/MRR to precision@k, hit-rate@k and
+  nDCG@k, reported at k = 1/3/5/10 ([ADR-012](docs/adr/ADR-012-retrieval-metrics-and-regression-diffing.md)).
+- Abstention became a measured output: 5 negatives in `golden_v2`, two error
+  directions reported separately ([ADR-011](docs/adr/ADR-011-abstention-as-a-measured-output.md)).
+- Citation validity became a deterministic assertion rather than a silent
+  filter ([ADR-014](docs/adr/ADR-014-citation-validation-is-code.md)).
+- CI now fails on per-metric *regressions*, not only on absolute thresholds.
+- A config sweep (`evals/sweep.py`) turns ADR-010's reranker toggle and the
+  hybrid-vs-single-arm question into measurements. **Both produced results
+  that contradict the design's assumptions**, which is what a sweep is for:
+  reranking *lowered* aggregate quality (Cohere nDCG@5 0.892, Jina 0.814, vs
+  0.897 unreranked) while adding ~1.2 s per query, and hybrid+RRF (0.897)
+  landed marginally *below* dense-alone (0.906) because Postgres FTS is a
+  weak leg on 500-page control catalogs (lexical-only nDCG@5: 0.267) and RRF
+  weights both arms equally. Both defaults were kept, now for measured
+  reasons rather than assumed ones — see ADR-010 and ADR-002.
+- The first abstention run scored `abstention_recall = 1.000` *and*
+  `false_abstention_rate = 0.400` — the system declines all 5 negatives and
+  also refuses 6 of 15 answerable questions. A single combined score would
+  have called that flawless.
+- The Qdrant adapter exists, off by default, proving the `SearchIndex` port
+  ([ADR-013](docs/adr/ADR-013-optional-qdrant-adapter.md)).
+- Two bugs found along the way: the OpenAI adapter inherited an ambient
+  `OPENAI_BASE_URL`, silently routing a configured key to whatever gateway a
+  developer machine had exported (now pinned, with a regression test); and
+  `evals.yml` claimed to ingest the corpus but ran no ingestion step (now
+  `evals/ingest_corpus.py`).
+
+Remaining from the roadmap (§10): Playwright e2e runs against a keyed stack,
+per-*example* regression diffing (the current diff is per-metric), a
+closed-set abstention label on the response schema, and the roadmap-proper
+items (multi-tenancy, query decomposition, GraphRAG, Cloud Run guide).

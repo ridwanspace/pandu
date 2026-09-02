@@ -63,7 +63,8 @@ Markdown-native — no PDF-parsing showcase), MS MARCO and similar QA sets
 
 ## The golden dataset
 
-`backend/evals/` holds a versioned golden dataset: 50–100
+`backend/evals/` holds a versioned golden dataset — currently 20 items
+(15 answerable + 5 negatives), growing toward 50–100
 question/answer/source triples over this corpus, stored as JSONL and
 treated like code (reviewed, versioned, changelog'd via
 `dataset_version`).
@@ -80,11 +81,29 @@ The construction method matters more than the count:
   table-lookup, negation).
 - **Question mix**: single-fact lookups, table lookups (800-53 control
   parameters), cross-document questions (CSF function → 800-53 controls),
-  and a few deliberately unanswerable questions to measure abstention.
+  and deliberately unanswerable questions to measure abstention.
 
-The dataset feeds two distinct evaluation tracks — retrieval metrics
-(recall@k, MRR — deterministic, no LLM, cheap enough for every run) and
-generation metrics (ragas faithfulness/relevancy/precision/recall +
+### Negatives (shipped in `golden_v2`)
+
+The unanswerable questions are no longer aspirational: `golden_v2.jsonl`
+carries five, marked `"answerable": false` and carrying no `source_files` —
+HIPAA, GDPR, PCI DSS, Kubernetes hardening, and ISO 27001 clause numbers.
+
+Each was **verified absent from the extracted text of all four PDFs** before
+being accepted, rather than assumed absent. That check earned its keep
+immediately: two candidates that looked obviously safe were not. "Basel" and
+"AML" both occur in the corpus — as substrings of *baseline* and of *AML*
+inside other tokens — and either would have become a question with no
+correct answer that also scored as a permanent retrieval miss.
+
+Negatives are excluded from rank metrics (undefined without a relevant
+document) and scored only by the abstention eval
+([ADR-011](adr/ADR-011-abstention-as-a-measured-output.md)).
+
+The dataset feeds three evaluation tracks — rank metrics (recall@k,
+precision@k, hit-rate@k, MRR, nDCG@k at k=1/3/5/10 — deterministic, no LLM,
+cheap enough for every run), abstention (two error directions, also LLM-free
+to score), and generation metrics (faithfulness/relevancy/precision/recall +
 LLM-as-judge — nightly and on-demand). See the README's evaluation section.
 
 ## Optional secondary corpus

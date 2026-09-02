@@ -12,6 +12,17 @@ import {
 import type { EvalRunOut } from "@/lib/api/types";
 import { formatDateTime } from "@/lib/format";
 
+// Bookkeeping fields record run shape, not quality: they are whole counts and
+// reading "examples 20.000" as a score is exactly the confusion to avoid.
+const COUNT_METRICS = new Set(["examples", "negatives", "positives", "k"]);
+
+// Lower is better, so it must not be read as a failing score.
+const INVERTED_METRICS = new Set(["false_abstention_rate"]);
+
+function formatMetric(name: string, value: number): string {
+  return COUNT_METRICS.has(name) ? String(Math.round(value)) : value.toFixed(3);
+}
+
 function configSummary(config: Record<string, unknown>): string {
   const entries = Object.entries(config)
     .filter(([, v]) => ["string", "number", "boolean"].includes(typeof v))
@@ -56,8 +67,14 @@ export function EvalRunsTable({ runs }: { runs: EvalRunOut[] }) {
               <TableCell>
                 <div className="flex flex-wrap gap-1">
                   {Object.entries(run.metrics).map(([name, value]) => (
-                    <Badge key={name} variant="secondary" className="font-mono font-normal">
-                      {name} {value.toFixed(3)}
+                    <Badge
+                      key={name}
+                      variant={COUNT_METRICS.has(name) ? "outline" : "secondary"}
+                      className="font-mono font-normal"
+                      title={INVERTED_METRICS.has(name) ? "lower is better" : undefined}
+                    >
+                      {name} {formatMetric(name, value)}
+                      {INVERTED_METRICS.has(name) ? " ↓" : ""}
                     </Badge>
                   ))}
                 </div>

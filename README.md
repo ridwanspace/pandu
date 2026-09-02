@@ -65,13 +65,13 @@ between that demo and infrastructure is everything around the pipeline:
 |---|---|
 | **Retrieval quality** | Hybrid BM25-like + dense vector search, Reciprocal Rank Fusion, cross-encoder reranking |
 | **Vendor independence** | OpenAI, Gemini, DeepSeek at launch; any vendor = one new adapter file (chat, embeddings, rerank are each a port) |
-| **Evaluation** | Golden dataset + ragas metrics (faithfulness, answer relevancy, context precision/recall) + LLM-as-judge, gated in CI |
+| **Evaluation** | Golden dataset **with negatives** + rank metrics (recall/precision/hit-rate/MRR/nDCG at k=1,3,5,10) + measured abstention + LLM-as-judge, gated in CI **on both thresholds and regressions** |
 | **Observability** | Langfuse tracing end-to-end (query → retrieval → rerank → generation), per-call token/cost metering |
 | **Governance** | API-key auth, rate limiting, prompt-injection surface hardening, counts-only logging (no prompt text in logs) |
 | **Engineering discipline** | Modular monolith + clean architecture, strict typing, architecture tests in CI, testcontainers integration tests |
 
-Every non-obvious decision has an [ADR](docs/adr/). The ten that shaped the
-system: [multi-provider seam](docs/adr/ADR-001-multi-provider-seam.md),
+Every non-obvious decision has an [ADR](docs/adr/). The fourteen that shaped
+the system: [multi-provider seam](docs/adr/ADR-001-multi-provider-seam.md),
 [pgvector](docs/adr/ADR-002-pgvector-single-postgres.md),
 [scope](docs/adr/ADR-003-full-showcase-scope.md),
 [no RAG framework](docs/adr/ADR-004-no-rag-framework.md),
@@ -80,7 +80,11 @@ system: [multi-provider seam](docs/adr/ADR-001-multi-provider-seam.md),
 [name](docs/adr/ADR-007-name-pandu.md),
 [coverage gate](docs/adr/ADR-008-layered-coverage-gate.md),
 [Biome](docs/adr/ADR-009-biome-frontend-toolchain.md),
-[reranker default](docs/adr/ADR-010-reranker-default-noop.md).
+[reranker default](docs/adr/ADR-010-reranker-default-noop.md),
+[abstention](docs/adr/ADR-011-abstention-as-a-measured-output.md),
+[metrics & diffing](docs/adr/ADR-012-retrieval-metrics-and-regression-diffing.md),
+[optional Qdrant](docs/adr/ADR-013-optional-qdrant-adapter.md),
+[citation validation](docs/adr/ADR-014-citation-validation-is-code.md).
 
 ## Architecture
 
@@ -193,8 +197,9 @@ Hand-built, no framework ([ADR-004](docs/adr/ADR-004-no-rag-framework.md)):
    ranks, not scores, so the two subsystems never need score calibration.
 3. **Optional rerank** — a cross-encoder (Cohere, Jina, or a local BGE
    model) reorders the fused candidates. Off by default so the quickstart
-   needs one API key, not two; the eval dashboard quantifies exactly what
-   turning it on buys ([ADR-010](docs/adr/ADR-010-reranker-default-noop.md)).
+   needs one API key, not two; `make sweep` measures exactly what turning it
+   on buys, in quality *and* in added latency
+   ([ADR-010](docs/adr/ADR-010-reranker-default-noop.md)).
 4. **Top 5** contexts go into a grounded prompt with numbered sources; the
    answer streams back with inline `[1][2]` citations.
 
@@ -273,6 +278,8 @@ The claim "clean architecture" is cheap; these gates make it measurable:
 | `make integration` | testcontainers (`pgvector/pgvector:pg17`) | Hybrid-search SQL, HNSW behavior, and migrations tested against real Postgres |
 | `make contract` | schemathesis | The OpenAPI schema the generated TS client depends on cannot drift |
 | `make coverage` | two `--fail-under` checks | **Layered gate: 100% on `domain/` + `application/`, 85% overall** |
+| `make evals-retrieval` | golden set, no LLM | Rank quality + **fails on regression vs the last run**, not just on thresholds |
+| `make sweep` | golden set, no LLM | What each retrieval arm and the reranker actually buy |
 
 The layered coverage gate is the architectural claim in numeric form: the
 framework-free core is *fully* unit-tested, while adapters are
@@ -287,9 +294,10 @@ backend:  ruff check + format --check → mypy --strict → lint-imports
           → pytest tests/contract → docker build
 frontend: biome check → tsc --noEmit → openapi client drift check
           → vitest → playwright (on compose stack) → next build
-evals:    (nightly + on-demand label) ragas suite on golden dataset
-          → fail if faithfulness < 0.85 or context_precision < 0.75
-          → publish scores to Langfuse + README badge
+evals:    (nightly + on-demand label) ingest corpus → rank metrics on golden set
+          → fail if recall@5 < 0.60 (thresholds ratchet, never loosen)
+          → fail on ANY per-metric regression vs the previous run (--compare)
+          → config sweep: hybrid vs dense vs lexical, k=1/3/5/10 (reported, not gated)
 ```
 
 ## Evaluation
@@ -297,32 +305,162 @@ evals:    (nightly + on-demand label) ragas suite on golden dataset
 Evaluation is the differentiator between "it seems to work" and "it works,
 and here is by how much."
 
-**Measured on the NIST corpus** (2026-08-16, `gemini-embedding-001`
-embeddings, hybrid + RRF, no reranker, `deepseek-v4-flash` judge over the
-15-example golden set):
+**Measured on the NIST corpus** — `golden_v2`, 2026-09-02,
+`gemini-embedding-001` embeddings, hybrid + RRF, no reranker, 1826 chunks
+across the four NIST publications, 15 answerable examples + 5 negatives:
 
-| Metric | Score | Gate |
+| Metric | k=1 | k=3 | **k=5** | k=10 | Gate |
+|---|---|---|---|---|---|
+| recall@k | 0.767 | 0.933 | **0.967** | 0.967 | ≥ 0.60 |
+| precision@k | 0.800 | 0.822 | **0.760** | 0.660 | — |
+| MRR | 0.800 | 0.889 | **0.889** | 0.889 | — |
+| nDCG@k | 0.800 | 0.880 | **0.897** | 0.897 | — |
+| hit-rate@k | 0.800 | 1.000 | **1.000** | 1.000 | — |
+
+| Abstention (LLM-free scoring) | Score | Gate |
 |---|---|---|
-| recall@5 (retrieval, LLM-free) | **0.967** | ≥ 0.60 |
-| MRR (retrieval, LLM-free) | **0.822** | — |
-| faithfulness (LLM-as-judge) | **0.852** | ≥ 0.85 |
-| answer relevancy (LLM-as-judge) | **0.870** | — |
+| abstention recall (negatives correctly declined) | **1.000** | ≥ 0.60 |
+| false abstention rate (answerable wrongly declined) | **0.400** ↓ | — |
 
-- **Golden dataset** — 15 (growing toward 50–100) question/answer/source triples over the NIST
-  corpus, versioned as JSONL in `backend/evals/`. Candidates are
-  bootstrapped with ragas' `TestsetGenerator`, then **every item is
-  human-curated** — synthetic-only golden sets are a known anti-pattern.
-- **Retrieval metrics ≠ generation metrics.** Recall@k and MRR run against
-  the golden set with *no LLM at all* — deterministic and nearly free, so
-  they can run constantly. Generation quality (ragas faithfulness, answer
-  relevancy, context precision/recall, plus a pydantic-ai LLM-as-judge
-  rubric) costs tokens and runs nightly plus on a `run-evals` PR label.
-- **Thresholds ratchet.** CI fails below faithfulness 0.85 / context
-  precision 0.75, and thresholds follow a **tightening-only rule**: they
-  may be raised, never lowered. A regression means fixing the change, not
-  the gate.
-- **Rerank on vs off** is reported side by side, turning a config toggle
-  into measured evidence.
+| LLM-as-judge (`deepseek-v4-flash`, 15 answerable) | Score | Gate |
+|---|---|---|
+| faithfulness | **0.798** | ≥ 0.85 — **FAILING** |
+| answer relevancy | **0.847** | — |
+
+**The faithfulness gate is currently red, and it is staying red.** The
+tightening-only rule means a threshold may be raised, never lowered, so a
+failing gate is a bug report rather than a number to edit. Splitting the run
+by example type says exactly what the bug is:
+
+| Example type | n | mean faithfulness |
+|---|---|---|
+| single-source | 12 | **0.868** (would pass) |
+| cross-document | 3 | **0.577** |
+
+Retrieving for a question that spans two publications, by `top_k`:
+
+```
+top_k= 5: {800-63b: 5}                        <- one document takes every slot
+top_k=10: {800-63b: 9, 800-53r5: 1}
+top_k=20: {800-63b: 13, 800-53r5: 4, 800-171r3: 3}
+```
+
+Chunks are scored independently with no diversity constraint, so the document
+with the strongest overlap monopolises all five context slots and the second
+source — needed to answer at all — first appears around rank 18. **Retrieval
+finds the evidence and then fails to distribute the context budget across the
+sources the question needs.**
+
+Note what this required: `recall@5 = 0.967` is blind to it, because it credits
+sources that were found. Faithfulness caught that the answer could not
+actually be composed from what reached the prompt. Two metrics disagreeing is
+the system working — and it is the argument for the metric expansion in one
+concrete case. The fix is per-document context caps or query decomposition
+([ADR-012](docs/adr/ADR-012-retrieval-metrics-and-regression-diffing.md)),
+which is real work and is not being done under cover of a relaxed gate.
+
+**Read these numbers with the caveats they earn.** `recall@5 = 0.967` is the
+weakest claim in the table: 12 of the 15 answerable examples have a single
+source file, so at k=5 it is close to a hit rate — "did the right document
+appear anywhere in five slots". The metrics that carry information are the
+ones that can fall:
+
+- **precision@k peaks at k=3 (0.822) and decays to 0.660 at k=10.** Past the
+  third context we are mostly feeding the model noise. Retrieving wide is
+  cheap; *prompting* wide is not.
+- **recall@1 is 0.767 against recall@5 of 0.967.** The evidence is being
+  found and then ranked below position 1 — textbook conditions for reranking
+  to pay. It did not (see the sweep below), which is a measurement, not an
+  assumption.
+- **abstention recall of 1.000 looks perfect and is not the whole story.**
+  The system declined all 5 negatives — and *also* declined 6 of the 15
+  answerable questions (`false_abstention_rate = 0.400`). A single combined
+  abstention score would have reported this system as flawless. Reporting
+  both directions is what makes it visible, and the false-abstention rate is
+  the number to attack next.
+
+- **Golden dataset** — `golden_v2.jsonl`: 15 answerable
+  question/answer/source triples over the NIST corpus **plus 5 negatives**,
+  versioned as JSONL in `backend/evals/`. Candidates are bootstrapped with
+  ragas' `TestsetGenerator`, then **every item is human-curated** —
+  synthetic-only golden sets are a known anti-pattern.
+- **Retrieval metrics ≠ generation metrics.** recall@k, precision@k,
+  hit-rate@k, MRR and nDCG@k run against the golden set with *no LLM at all*
+  — deterministic and nearly free, so they run on every push. Generation
+  quality (faithfulness, answer relevancy, context precision/recall) costs
+  tokens and runs nightly plus on a `run-evals` PR label.
+- **Reported at k = 1, 3, 5, 10.** A single k hides the diagnosis: the gap
+  between recall@1 and recall@5 is precisely the signal that says *retrieval
+  finds it but ranks it badly*, which is the condition under which reranking
+  pays for its latency.
+- **Abstention is measured, not prompted.** The golden set carries negatives
+  — questions the corpus genuinely cannot answer — and the eval reports two
+  error directions separately: `abstention_recall` (of the negatives, how
+  many were correctly declined) and `false_abstention_rate` (of the
+  answerable, how many were needlessly declined). Without negatives a system
+  that answers *everything* confidently scores identically to one that
+  declines correctly, and a single combined number would let a system that
+  refuses everything look perfect
+  ([ADR-011](docs/adr/ADR-011-abstention-as-a-measured-output.md)).
+- **Citations are verified in code, not requested in a prompt.** Every
+  marker in an answer must correspond to a retrieved context; violations are
+  counted onto the trace. The check is structural — it proves a citation
+  points at a chunk that was really retrieved, *not* that the chunk supports
+  the claim ([ADR-014](docs/adr/ADR-014-citation-validation-is-code.md)).
+- **Thresholds ratchet.** CI fails below recall@5 0.60 / faithfulness 0.85 /
+  context precision 0.75 / abstention recall 0.60, under a
+  **tightening-only rule**: they may be raised, never lowered. A regression
+  means fixing the change, not the gate.
+- **The gate also diffs.** `--compare` compares a run against the previous
+  stored run of the same dataset version and **fails on any per-metric
+  regression, even when every absolute threshold passes** — because a mean
+  can hold still while some examples break and others improve. The aggregate
+  lies; the diff does not
+  ([ADR-012](docs/adr/ADR-012-retrieval-metrics-and-regression-diffing.md)).
+- **Rerank on vs off** — and hybrid vs dense-only vs lexical-only — is
+  measured by `make sweep`, turning config toggles into evidence rather than
+  claims. The results are below, including the ones that contradict the
+  design.
+
+### What the sweep actually found
+
+`make sweep` on the corpus above, 15 answerable examples, k=5:
+
+| Configuration | recall@5 | precision@5 | MRR | nDCG@5 | latency |
+|---|---|---|---|---|---|
+| **hybrid + RRF** (the default) | 0.967 | 0.760 | 0.889 | 0.897 | 602 ms |
+| dense only | 0.967 | 0.747 | **0.900** | **0.906** | 587 ms |
+| lexical only | 0.267 | 0.267 | 0.267 | 0.267 | 530 ms |
+| hybrid + Cohere `rerank-v3.5` | 0.933 | 0.733 | **0.922** | 0.892 | 1803 ms |
+| hybrid + Jina `v2-base-multilingual` | 0.900 | 0.667 | 0.822 | 0.814 | 1692 ms |
+
+Three findings, two of them inconvenient:
+
+1. **Reranking made retrieval worse, and cost ~1.2 s per query.** Cohere
+   nudged MRR up (0.889 → 0.922 — it *does* sharpen the top position) but
+   dropped recall, precision and nDCG; Jina lost on every metric. This is
+   exactly the situation [ADR-010](docs/adr/ADR-010-reranker-default-noop.md)
+   assumed without proof when it defaulted the reranker to a no-op. The
+   default was right, and now it is right *for a measured reason*.
+2. **Hybrid does not beat dense alone here.** RRF weights both arms equally,
+   and with `gemini-embedding-001` the lexical arm is very much the weaker
+   leg (nDCG 0.267 vs 0.906) — so fusion drags the strong retriever down
+   slightly rather than lifting it. Hybrid is a hypothesis to test per
+   corpus, not a law.
+3. **The lexical arm is genuinely weak on this corpus, and that is
+   informative, not broken.** Postgres FTS is BM25-*like*: `ts_rank_cd` has
+   no term saturation or length normalisation. On 500-page control catalogs,
+   where a query's terms appear in hundreds of chunks, that limitation bites
+   hard.
+
+**Why hybrid is still the default despite the number.** The gap is 0.009
+nDCG — inside the noise of a 15-example set — while the lexical arm's value
+is categorical rather than average: exact identifiers (`AU-11`, `AC-2`,
+`AAL2`) are precisely what dense retrieval misses and what compliance
+questions are made of. Removing the arm to chase a third-decimal gain would
+optimise for this golden set rather than for the queries the system exists
+to answer. The honest position is that this is a **defensible choice, not a
+measured win** — and the sweep is committed so anyone can check it.
 - **Langfuse** (optional compose profile — v3 needs ClickHouse + MinIO)
   gives every chat request a full trace: candidate sets, RRF ranks, rerank
   scores, generation span, token usage, cost. Eval scores are written back
@@ -346,6 +484,9 @@ embeddings, hybrid + RRF, no reranker, `deepseek-v4-flash` judge over the
 │   │       └── infrastructure/ai/  # the ONLY place vendor SDKs are imported
 │   ├── tests/{unit,integration,contract,architecture}/
 │   ├── evals/                      # golden dataset (JSONL) + corpus + runners
+│   │   ├── run.py                  #   thresholds + `--compare` regression diff
+│   │   ├── sweep.py                #   hybrid/dense/lexical × rerank × k evidence
+│   │   └── ingest_corpus.py        #   load the corpus without API/worker/Redis
 │   └── migrations/                 # alembic, grouped per module
 ├── frontend/                       # Next.js 16 · TS strict · Tailwind 4 + shadcn/ui · Biome
 ├── docs/
@@ -375,8 +516,24 @@ no SDK.
 | 4 | Langfuse traces, cost dashboard, OpenTelemetry | Production operability |
 | 5 | schemathesis, Playwright e2e, security scans, rate limiting, prompt-injection tests | The "enterprise-grade" claim, earned |
 
-Beyond v1: multi-tenant workspaces, a Qdrant `SearchIndex` adapter, query
-decomposition (pydantic-ai), a GraphRAG spike, and the
+The Qdrant `SearchIndex` adapter now exists and ships **off by default**
+(`SEARCH_INDEX=pg`) — built to demonstrate that the port is real rather than
+to change the deployment, and honest about replacing only the dense arm since
+Qdrant's core API has no BM25
+([ADR-013](docs/adr/ADR-013-optional-qdrant-adapter.md)).
+
+**Next, and named by a measurement rather than a hunch:**
+
+1. **Per-document context caps.** Cross-document faithfulness is 0.577 against
+   0.868 single-source because one publication takes all five context slots.
+   A diversity constraint over the fused candidates is the smallest fix.
+2. **Reduce the 0.400 false-abstention rate.** The system declines 6 of 15
+   answerable questions — safe, but not useful.
+3. **Per-example regression diffing.** The current diff is per-metric; it sees
+   that something moved, not which question broke.
+
+Beyond that: multi-tenant workspaces, a closed-set abstention label on the
+response schema, query decomposition (pydantic-ai), a GraphRAG spike, and the
 [Cloud Run deployment guide](docs/deploy-cloud-run.md).
 
 ## About
