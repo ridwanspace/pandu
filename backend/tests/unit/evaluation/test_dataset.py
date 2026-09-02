@@ -70,3 +70,36 @@ class TestParseGoldenJsonl:
         (example,) = parse_golden_jsonl([_line(id="  q1  ", source_files=[" a.pdf "])])
         assert example.id == "q1"
         assert example.source_files == ("a.pdf",)
+
+
+class TestAnswerableFlag:
+    """Negatives — questions the corpus cannot answer — make abstention measurable."""
+
+    def test_defaults_to_answerable(self) -> None:
+        (example,) = parse_golden_jsonl([_line()])
+        assert example.answerable is True
+
+    def test_negative_parses_without_source_files(self) -> None:
+        raw = json.loads(_line())
+        raw.pop("source_files")
+        raw["answerable"] = False
+        (example,) = parse_golden_jsonl([json.dumps(raw)])
+        assert example.answerable is False
+        assert example.source_files == ()
+
+    def test_negative_with_empty_source_files_list(self) -> None:
+        (example,) = parse_golden_jsonl([_line(source_files=[], answerable=False)])
+        assert example.answerable is False
+
+    def test_negative_with_source_files_rejected(self) -> None:
+        """A labelling error that would otherwise score as a permanent retrieval miss."""
+        with pytest.raises(InvalidInputError, match="must not list 'source_files'"):
+            parse_golden_jsonl([_line(source_files=["a.pdf"], answerable=False)])
+
+    def test_answerable_example_still_requires_source_files(self) -> None:
+        with pytest.raises(InvalidInputError, match="source_files"):
+            parse_golden_jsonl([_line(source_files=[], answerable=True)])
+
+    def test_non_boolean_answerable_rejected(self) -> None:
+        with pytest.raises(InvalidInputError, match="must be a boolean"):
+            parse_golden_jsonl([_line(answerable="false")])
