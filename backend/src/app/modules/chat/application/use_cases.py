@@ -17,7 +17,7 @@ from app.modules.chat.application.events import (
     TokenEvent,
     UsageEvent,
 )
-from app.modules.chat.domain.citations import used_citations
+from app.modules.chat.domain.citations import validate_citations
 from app.modules.chat.domain.entities import Citation, Conversation, Message, MessageRole
 from app.modules.chat.domain.prompting import (
     PromptContext,
@@ -214,6 +214,10 @@ class AskQuestion:
             if self._estimate_cost is not None and completed is not None:
                 cost_usd = self._estimate_cost(completed.model, usage)
 
+            # Assert grounding rather than silently dropping bad markers: the
+            # counts land on the trace so hallucinated citations are measurable.
+            report = validate_citations(citations, answer)
+
             await self._messages.add_message(
                 Message(
                     id=message_id,
@@ -226,7 +230,7 @@ class AskQuestion:
                     completion_tokens=usage.completion_tokens,
                     cost_usd=cost_usd,
                     latency_ms=latency_ms,
-                    citations=used_citations(citations, answer),
+                    citations=report.cited,
                 )
             )
             span.annotate(
@@ -234,6 +238,9 @@ class AskQuestion:
                 prompt_tokens=usage.prompt_tokens,
                 completion_tokens=usage.completion_tokens,
                 latency_ms=latency_ms,
+                # Counts only — answer and prompt text never reach the tracer.
+                invalid_citation_count=len(report.invalid_markers),
+                citation_validity=report.validity,
             )
             yield UsageEvent(model=model, usage=usage, cost_usd=cost_usd, latency_ms=latency_ms)
             yield DoneEvent(message_id=message_id)

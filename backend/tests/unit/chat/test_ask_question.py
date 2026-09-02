@@ -65,16 +65,22 @@ class InMemoryMessageRepository:
 
 
 class FakeSpan:
+    def __init__(self, annotations: dict[str, object]) -> None:
+        self._annotations = annotations
+
     def annotate(self, **attributes: object) -> None:
-        pass
+        self._annotations.update(attributes)
 
 
 class FakeTracer:
+    def __init__(self) -> None:
+        self.annotations: dict[str, object] = {}
+
     @contextmanager
     def span(
         self, name: str, *, trace_id: str | None = None, **attributes: object
     ) -> Iterator[FakeSpan]:
-        yield FakeSpan()
+        yield FakeSpan(self.annotations)
 
     def flush(self) -> None:
         pass
@@ -148,13 +154,14 @@ def _make_ask(
     messages: InMemoryMessageRepository,
     llm: FakeStreamingLLM | FailingLLM,
     retrieve: FakeRetrieve,
+    tracer: FakeTracer | None = None,
 ) -> AskQuestion:
     return AskQuestion(
         conversations=conversations,
         messages=messages,
         retrieve=retrieve,  # type: ignore[arg-type]
         llm=llm,
-        tracer=FakeTracer(),
+        tracer=tracer or FakeTracer(),
         estimate_cost=lambda model, usage: Decimal("0.000123"),
         max_question_chars=200,
     )
@@ -210,6 +217,77 @@ async def test_happy_path_event_order_and_persistence() -> None:
     assert assistant.completion_tokens == 30
     assert assistant.cost_usd == Decimal("0.000123")
     assert [c.marker for c in assistant.citations] == [1]  # [2] was retrieved, not cited
+
+
+async def test_valid_citations_are_annotated_as_fully_valid() -> None:
+    conversations = InMemoryConversationRepository()
+    messages = InMemoryMessageRepository()
+    retrieve = FakeRetrieve((_chunk(1, "install with uv"), _chunk(2, "configure the env")))
+    llm = FakeStreamingLLM(("Use uv ", "[1] to install."), USAGE, MODEL)
+    conversation = await _start_conversation(conversations)
+    tracer = FakeTracer()
+    ask = _make_ask(conversations, messages, llm, retrieve, tracer)
+
+    await _collect(ask(conversation.id, "How do I install?"))
+
+    assert tracer.annotations["invalid_citation_count"] == 0
+    assert tracer.annotations["citation_validity"] == 1.0
+
+
+async def test_hallucinated_marker_is_annotated_and_not_persisted() -> None:
+    conversations = InMemoryConversationRepository()
+    messages = InMemoryMessageRepository()
+    retrieve = FakeRetrieve((_chunk(1, "install with uv"),))
+    llm = FakeStreamingLLM(("Use uv [1] ", "and see [9]."), USAGE, MODEL)
+    conversation = await _start_conversation(conversations)
+    tracer = FakeTracer()
+    ask = _make_ask(conversations, messages, llm, retrieve, tracer)
+
+    events = await _collect(ask(conversation.id, "How do I install?"))
+
+    # Event union and ordering are unchanged: no new event type is emitted.
+    assert [type(e) for e in events] == [
+        SourcesEvent,
+        TokenEvent,
+        TokenEvent,
+        UsageEvent,
+        DoneEvent,
+    ]
+    assert tracer.annotations["invalid_citation_count"] == 1
+    assert tracer.annotations["citation_validity"] == 0.5
+    persisted = await messages.list_messages(conversation.id)
+    assert [c.marker for c in persisted[-1].citations] == [1]
+
+
+async def test_abstention_scores_as_valid() -> None:
+    conversations = InMemoryConversationRepository()
+    messages = InMemoryMessageRepository()
+    retrieve = FakeRetrieve((_chunk(1, "unrelated"),))
+    llm = FakeStreamingLLM(("The context does not cover this.",), USAGE, MODEL)
+    conversation = await _start_conversation(conversations)
+    tracer = FakeTracer()
+    ask = _make_ask(conversations, messages, llm, retrieve, tracer)
+
+    await _collect(ask(conversation.id, "Unanswerable?"))
+
+    assert tracer.annotations["invalid_citation_count"] == 0
+    assert tracer.annotations["citation_validity"] == 1.0
+    persisted = await messages.list_messages(conversation.id)
+    assert persisted[-1].citations == ()
+
+
+async def test_provider_failure_annotates_error_and_no_citation_validity() -> None:
+    conversations = InMemoryConversationRepository()
+    messages = InMemoryMessageRepository()
+    retrieve = FakeRetrieve((_chunk(1, "text"),))
+    conversation = await _start_conversation(conversations)
+    tracer = FakeTracer()
+    ask = _make_ask(conversations, messages, FailingLLM(), retrieve, tracer)
+
+    await _collect(ask(conversation.id, "How?"))
+
+    assert tracer.annotations["error"] == "ProviderError"
+    assert "citation_validity" not in tracer.annotations
 
 
 async def test_document_ids_are_forwarded_to_retrieval() -> None:
