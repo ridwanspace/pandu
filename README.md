@@ -37,14 +37,26 @@ UI → API → Postgres → DeepSeek, no mocks):
 ![Chat — streamed answer with inline citations and the retrieved-vs-cited sources panel](assets/chat.png)
 
 *A cross-document question over the NIST corpus: hybrid retrieval
-(pgvector + FTS + RRF, `gemini-embedding-001`) surfaces §4.2.3
-Reauthentication from SP 800-63B and control AU-11 from SP 800-53r5;
-`deepseek-v4-flash` answers grounded with inline [n] citations, and the
-footer shows tokens, metered cost, and latency for the call.*
+(pgvector + FTS + RRF, `gemini-embedding-001`) pulls four contexts spanning
+**both** publications — the AU control catalog from SP 800-53r5 plus the
+tailoring criteria and methodology from SP 800-171r3 — and
+`deepseek-v4-flash` composes the actual control mapping (AU-01 → 03.15.01,
+AU-02 → 03.03.01, AU-09 → 03.03.08) with inline [n] citations. The footer
+shows tokens, metered cost, and latency for the call. Composing across two
+publications is the case that
+[ADR-015](docs/adr/ADR-015-lexical-arm-ranks-not-filters.md) fixed: while the
+lexical arm was silently empty, one document tended to take every context
+slot.*
 
 | Documents — upload, parse, chunk, embed | Dashboard — eval metrics & live cost ledger |
 |---|---|
-| ![Documents page with ingestion statuses](assets/documents.png) | ![Dashboard with cost cards and daily spend](assets/dashboard.png) |
+| ![Documents page with ingestion statuses](assets/documents.png) | ![Dashboard with eval-run metrics and cost cards](assets/dashboard.png) |
+
+*The dashboard reads the same `eval_runs` table CI gates on, so the trend line
+is the real history: the August `golden_v1` runs (MRR 0.822) and the September
+`golden_v2` runs after the lexical fix (`ndcg_at_k 0.925`, `mrr 0.933`,
+`recall_at_k 0.967`), plus the abstention row where
+`false_abstention_rate 0.267 ↓` replaced the earlier 0.400.*
 
 ![Langfuse trace of a chat request — span waterfall and retrieval metadata](assets/observability.png)
 
@@ -294,7 +306,7 @@ backend:  ruff check + format --check → mypy --strict → lint-imports
           → pytest tests/contract → docker build
 frontend: biome check → tsc --noEmit → openapi client drift check
           → vitest → playwright (on compose stack) → next build
-evals:    (nightly + on-demand label) ingest corpus → rank metrics on golden set
+evals:    (manual / `run-evals` label) ingest corpus → rank metrics on golden set
           → fail if recall@5 < 0.60 (thresholds ratchet, never loosen)
           → fail on ANY per-metric regression vs the previous run (--compare)
           → config sweep: hybrid vs dense vs lexical, k=1/3/5/10 (reported, not gated)
@@ -322,17 +334,25 @@ taken while the lexical arm silently returned nothing on 14 of 20 questions,
 so "hybrid" was measuring dense-only. See
 [ADR-015](docs/adr/ADR-015-lexical-arm-ranks-not-filters.md). Precision@5
 fell 0.760 → 0.680 in the same change — the real cost of a live lexical arm.
-Abstention and judge scores below still predate the fix and are due a re-run.
 
 | Abstention (LLM-free scoring) | Score | Gate |
 |---|---|---|
 | abstention recall (negatives correctly declined) | **1.000** | ≥ 0.60 |
-| false abstention rate (answerable wrongly declined) | **0.400** ↓ | — |
+| false abstention rate (answerable wrongly declined) | **0.267** ↓ | — |
 
 | LLM-as-judge (`deepseek-v4-flash`, 15 answerable) | Score | Gate |
 |---|---|---|
-| faithfulness | **0.798** | ≥ 0.85 — **FAILING** |
+| faithfulness | **0.810** | ≥ 0.85 — **FAILING** |
 | answer relevancy | **0.847** | — |
+
+Both tracks were re-run after the lexical fix. **False abstention fell 0.400 →
+0.267** — 4 of 15 answerable questions wrongly declined instead of 6, because
+better-ranked context gives the model less reason to refuse. **Faithfulness did
+not follow: 0.798 → 0.810, still under the 0.85 gate** (and it moves ±0.02
+between runs on judge nondeterminism alone). That is worth stating plainly —
+the retrieval fix was expected to help here and essentially did not, which
+means the cross-document problem below is its own defect rather than a
+downstream symptom of the dead lexical arm.
 
 **The faithfulness gate is currently red, and it is staying red.** The
 tightening-only rule means a threshold may be raised, never lowered, so a
@@ -341,30 +361,48 @@ by example type says exactly what the bug is:
 
 | Example type | n | mean faithfulness |
 |---|---|---|
-| single-source | 12 | **0.868** (would pass) |
-| cross-document | 3 | **0.577** |
+| single-source | 11 | **0.870** (would pass) |
+| cross-document | 3 | **0.543** |
 
-Retrieving for a question that spans two publications, by `top_k`:
+Re-measured 2026-09-06 after the lexical fix (previously 0.868 / 0.577 — the
+split barely moved, which is the point: this defect is not the dead lexical
+arm). One single-source example is missing from the split because the judge
+returned an empty completion on it after four retries; three cross-document
+examples is a small enough n that individual verdicts swing hard
+(`cross-audit-53-171` scored 1.000 in this run, 0.200 for `cross-csf-800-53`),
+so read the gap as a direction, not a precise quantity.
+
+Per-document distribution of the retrieved contexts, all three
+cross-document questions, measured 2026-09-06:
 
 ```
-top_k= 5: {800-63b: 5}                        <- one document takes every slot
-top_k=10: {800-63b: 9, 800-53r5: 1}
-top_k=20: {800-63b: 13, 800-53r5: 4, 800-171r3: 3}
+cross-audit-53-171   top_k= 5: {800-53r5: 2, 800-171r3: 3}   <- both sources
+cross-csf-800-53     top_k= 5: {800-53r5: 3, csf-2.0:   2}   <- both sources
+cross-mfa-171-63b    top_k= 5: {800-63b:  5}                 <- one document
+                     top_k=10: {800-63b:  9, 800-171r3: 1}      takes every slot
 ```
 
-Chunks are scored independently with no diversity constraint, so the document
-with the strongest overlap monopolises all five context slots and the second
-source — needed to answer at all — first appears around rank 18. **Retrieval
-finds the evidence and then fails to distribute the context budget across the
-sources the question needs.**
+The monopolisation is real but **specific, not general**: two of the three now
+split cleanly across both publications, and only `cross-mfa-171-63b` starves its
+second source. SP 800-171's `§ 03.05.03 Multi-Factor Authentication` is in the
+corpus and exactly on point, but both arms rank 800-63B above it — the question
+is *about* authentication assurance levels, and 800-63B is the authentication
+document. That is a ranking failure, not a slot-allocation failure.
 
-Note what this required: `recall@5 = 0.967` is blind to it, because it credits
-sources that were found. Faithfulness caught that the answer could not
-actually be composed from what reached the prompt. Two metrics disagreeing is
-the system working — and it is the argument for the metric expansion in one
-concrete case. The fix is per-document context caps or query decomposition
-([ADR-012](docs/adr/ADR-012-retrieval-metrics-and-regression-diffing.md)),
-which is real work and is not being done under cover of a relaxed gate.
+The distinction decides the fix. **Per-document context caps were the obvious
+answer, and measuring them killed the idea**: every cap value trades recall
+(0.967 → 0.933) and hit-rate (1.000 → 0.933) away to gain that one question, and
+pulls more documents into the negatives, which pushes false abstention the wrong
+way. Rejected with the numbers in
+[ADR-015](docs/adr/ADR-015-lexical-arm-ranks-not-filters.md) rather than shipped
+on the strength of a plausible hypothesis.
+
+Note what the diagnosis required: `recall@5 = 0.967` is blind to this, because it
+credits sources that were found. Faithfulness caught that the answer could not be
+composed from what reached the prompt. Two metrics disagreeing is the system
+working. What remains is query decomposition for multi-source questions, or a
+diversity term inside the fusion score rather than a filter after it — real work,
+not being done under cover of a relaxed gate.
 
 **Read these numbers with the caveats they earn.** `recall@5 = 0.967` is the
 weakest claim in the table: 12 of the 15 answerable examples have a single
@@ -372,19 +410,20 @@ source file, so at k=5 it is close to a hit rate — "did the right document
 appear anywhere in five slots". The metrics that carry information are the
 ones that can fall:
 
-- **precision@k peaks at k=3 (0.822) and decays to 0.660 at k=10.** Past the
-  third context we are mostly feeding the model noise. Retrieving wide is
+- **precision@k peaks at k=1 (0.933) and decays to 0.540 at k=10.** Past the
+  first few contexts we are mostly feeding the model noise. Retrieving wide is
   cheap; *prompting* wide is not.
-- **recall@1 is 0.767 against recall@5 of 0.967.** The evidence is being
-  found and then ranked below position 1 — textbook conditions for reranking
-  to pay. It did not (see the sweep below), which is a measurement, not an
-  assumption.
+- **recall@1 is 0.833 against recall@5 of 0.967.** The evidence is being found
+  and then ranked below position 1 — textbook conditions for reranking to pay.
+  It did not (see the sweep below), which is a measurement, not an assumption.
+  The gap narrowed from 0.767→0.833 with the lexical fix, so there is less left
+  for a reranker to recover than there was.
 - **abstention recall of 1.000 looks perfect and is not the whole story.**
-  The system declined all 5 negatives — and *also* declined 6 of the 15
-  answerable questions (`false_abstention_rate = 0.400`). A single combined
-  abstention score would have reported this system as flawless. Reporting
-  both directions is what makes it visible, and the false-abstention rate is
-  the number to attack next.
+  The system declined all 5 negatives — and *also* declined 4 of the 15
+  answerable questions (`false_abstention_rate = 0.267`, down from 0.400 before
+  the lexical fix). A single combined abstention score would have reported this
+  system as flawless. Reporting both directions is what makes it visible, and
+  the false-abstention rate is still the number to attack next.
 
 - **Golden dataset** — `golden_v2.jsonl`: 15 answerable
   question/answer/source triples over the NIST corpus **plus 5 negatives**,
@@ -395,7 +434,9 @@ ones that can fall:
   hit-rate@k, MRR and nDCG@k run against the golden set with *no LLM at all*
   — deterministic and nearly free, so they run on every push. Generation
   quality (faithfulness, answer relevancy, context precision/recall) costs
-  tokens and runs nightly plus on a `run-evals` PR label.
+  tokens and runs on demand — `workflow_dispatch` or a `run-evals` PR label.
+  (The nightly cron is disabled: a fresh service container has no stored
+  baseline for `--compare` to diff against, so it could only ever fail.)
 - **Reported at k = 1, 3, 5, 10.** A single k hides the diagnosis: the gap
   between recall@1 and recall@5 is precisely the signal that says *retrieval
   finds it but ranks it badly*, which is the condition under which reranking
@@ -543,19 +584,18 @@ Qdrant's core API has no BM25
 
 **Next, and named by a measurement rather than a hunch:**
 
-1. **Re-measure the judge and abstention tracks.** Both predate the ADR-015
-   lexical fix, which changed what reaches the LLM on most questions. The
-   0.798 faithfulness figure and the 0.400 false-abstention rate are stale
-   until re-run — and the cross-document diagnosis below depends on them.
-2. **Cross-document faithfulness (0.577 vs 0.868 single-source).** Per-document
-   context caps were the obvious fix and were **measured and rejected** — see
-   ADR-015: every cap value trades recall and hit-rate away to fix one of three
-   cross-document questions. This is a ranking problem, not a slot-allocation
-   problem, so the candidates are query decomposition for multi-source
-   questions, or a diversity term inside the fusion score rather than a filter
-   after it.
-3. **Reduce the 0.400 false-abstention rate.** The system declines 6 of 15
-   answerable questions — safe, but not useful.
+1. **Faithfulness, still 0.810 against a 0.85 gate.** Re-measured after the
+   lexical fix and it barely moved (0.798 → 0.810), which rules out the dead
+   lexical arm as the cause and leaves the cross-document case above as the
+   real one. Per-document caps are measured and rejected (ADR-015); what is
+   left is query decomposition for multi-source questions, or a diversity term
+   inside the fusion score rather than a filter applied after it.
+2. **Reduce the 0.267 false-abstention rate.** Down from 0.400 with the
+   lexical fix — the system still declines 4 of 15 answerable questions, which
+   is safe but not useful.
+3. **Re-run the reranker sweep.** Those rows were measured against a
+   dense-only baseline; the reranker's value proposition changes now that the
+   unreranked baseline is stronger (nDCG 0.897 → 0.920).
 4. **Per-example regression diffing.** The current diff is per-metric; it sees
    that something moved, not which question broke.
 
