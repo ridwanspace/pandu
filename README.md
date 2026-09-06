@@ -58,15 +58,48 @@ is the real history: the August `golden_v1` runs (MRR 0.822) and the September
 `recall_at_k 0.967`), plus the abstention row where
 `false_abstention_rate 0.267 ↓` replaced the earlier 0.400.*
 
-![Langfuse trace of a chat request — span waterfall and retrieval metadata](assets/observability.png)
+The same request in the self-hosted Langfuse (v3 on ClickHouse,
+`docker compose --profile observability up`) — one `chat.ask` trace, the
+`retrieval.embed → search → rerank` span waterfall, and three spans worth
+opening because each answers a different question about the request.
 
-*The same request in the self-hosted Langfuse (v3 on ClickHouse,
-`docker compose --profile observability up`): one `chat.ask` trace with the
-`retrieval.embed → search → rerank` span waterfall. The metadata panel shows
-what the tracer is allowed to record — model ids, candidate counts, RRF
-constant, latencies. Input/output are empty by design: prompt and document
-text never leave the app, and token costs live in Pandu's own metering
-ledger (dashboard above), not the tracing backend.*
+**`retrieval.search` — did both arms actually retrieve?**
+
+![Langfuse retrieval.search span showing dense_count 20, lexical_count 20, fused_count 35](assets/observability.png)
+
+*`dense_count: 20`, `lexical_count: 20`, `fused_count: 35` — 40 candidates
+deduplicating to 35 means five chunks were found by **both** arms, which is
+exactly the agreement RRF rewards. This panel is also where the ADR-015 bug was
+visible the whole time: the previous version of this screenshot, taken in
+August and shipped in this README, reads `lexical_count: 0` next to
+`dense_count: 20`. The trace was publishing the dead arm for three weeks and
+nobody read it — the argument for tracing per-arm provenance, and for actually
+looking at it.*
+
+**`retrieval.embed` — which model, at what cost?**
+
+![Langfuse retrieval.embed span showing the embedding model and dimensions](assets/observability-embed.png)
+
+*The embedding model and vector width are recorded per request
+(`gemini/gemini-embedding-001`, 1536 dims, 701 ms), so a provider swap through
+the `EmbeddingProvider` port is visible in the trace rather than inferred from
+config. `prompt_tokens: 0` because this provider does not meter query
+embeddings.*
+
+**`chat.ask` — what reached the model, and were the citations real?**
+
+![Langfuse chat.ask root span showing tokens, latency and citation validity](assets/observability-generation.png)
+
+*`retrieved: 5`, `prompt_tokens: 2475`, `completion_tokens: 650`,
+`latency_ms: 5404` — and `invalid_citation_count: 0` / `citation_validity: 1`,
+which is [ADR-014](docs/adr/ADR-014-citation-validation-is-code.md)'s
+deterministic check surfacing as trace data. Citation validity is computed in
+code and counted onto the trace, not requested in a prompt and hoped for.*
+
+Across all three: **input and output are empty by design.** Prompt and document
+text never leave the app, and token costs live in Pandu's own metering ledger
+(dashboard above), not the tracing backend. What the tracer is allowed to record
+is model ids, counts, and latencies — nothing that carries corpus content.
 
 ## Why this repo looks the way it does
 

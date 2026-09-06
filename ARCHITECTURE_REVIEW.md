@@ -423,10 +423,20 @@ single aggregate score was hiding:
   (`lexical_rank=None` on every candidate) instead of the mean — which is the
   argument for keeping `dense_rank` / `lexical_rank` on every fused candidate
   rather than just the fused score.
+
+  The sharper version of the lesson: the evidence was *already published*. The
+  Langfuse `retrieval.search` span records `dense_count` and `lexical_count`
+  per request, and the observability screenshot committed to the README in
+  August shows `lexical_count: 0` sitting next to `dense_count: 20`. Tracing
+  the right field is not the hard part — the instrumentation was correct and
+  had been correct all along. Reading it is. Instrumentation nobody looks at
+  is a strictly more expensive way to not know something.
 - The first abstention run scored `abstention_recall = 1.000` *and*
   `false_abstention_rate = 0.400` — the system declines all 5 negatives and
   also refuses 6 of 15 answerable questions. A single combined score would
-  have called that flawless.
+  have called that flawless. (After the ADR-015 lexical fix this improved to
+  `0.267` — 4 of 15 — because better-ranked context gives the model less
+  reason to refuse. Faithfulness, measured the same day, did not follow.)
 - The Qdrant adapter exists, off by default, proving the `SearchIndex` port
   ([ADR-013](docs/adr/ADR-013-optional-qdrant-adapter.md)).
 - Two bugs found along the way: the OpenAI adapter inherited an ambient
