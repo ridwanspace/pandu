@@ -1,15 +1,34 @@
 name: evals
 
+# The nightly cron is disabled (2026-09-06). It had failed every night since
+# at least 2026-08-31, for two structural reasons rather than a flaky run:
+#
+#   1. **No baseline to diff.** `--compare` fails a run against the previous
+#      stored one, but the `postgres` service container below is created fresh
+#      per run, so `eval_runs` is always empty. There is nothing to compare to
+#      and never will be without a persisted database.
+#   2. **Wrong embedding model.** The env pins
+#      `openai/text-embedding-3-small` while every number in the README and in
+#      ADR-002/010/012/015 was measured on `gemini/gemini-embedding-001`. A
+#      nightly that scores a different retriever than the documented one
+#      cannot regress-test the documented claims.
+#
+# A red nightly that nobody can act on trains people to ignore CI, and it
+# burns runner minutes doing it. Manual and label-triggered runs still work
+# and are the honest interface: run the evals when you have changed retrieval,
+# against a database that holds a baseline.
+#
+# To restore the nightly, both causes need fixing — see README §10: point CI
+# at a persistent Postgres (so `eval_runs` accumulates) and give it the Gemini
+# key, or drop `--compare` and gate on absolute thresholds only.
 on:
-  schedule:
-    - cron: "0 2 * * *" # nightly
   workflow_dispatch:
   pull_request:
     types: [labeled]
 
 jobs:
   evals:
-    # Nightly, manual, or when a PR gets the `run-evals` label.
+    # Manual, or when a PR gets the `run-evals` label.
     if: >-
       github.event_name != 'pull_request' ||
       github.event.label.name == 'run-evals'
