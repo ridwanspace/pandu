@@ -290,7 +290,7 @@ Eval thresholds start permissive and ratchet up — a *tightening-only* rule, st
 - **Retrieval-only metrics** (recall@k, precision@k, hit-rate@k, MRR, nDCG@k against the golden set) run *without* any LLM — cheap, deterministic, and shows you know retrieval evaluation ≠ generation evaluation. Reported at k = 1/3/5/10: the recall@1-vs-recall@5 gap is the specific signal that says "retrieval finds it but ranks it badly", which is when reranking pays ([ADR-012](docs/adr/ADR-012-retrieval-metrics-and-regression-diffing.md)).
 - **Abstention** is a measured output, not a prompt instruction. The golden set carries **negatives** — questions the corpus genuinely cannot answer — and the eval reports two error directions separately: `abstention_recall` and `false_abstention_rate`. Without negatives, a system that answers everything confidently scores identically to one that declines correctly ([ADR-011](docs/adr/ADR-011-abstention-as-a-measured-output.md)).
 - **Regression diffing**: `--compare` diffs a run against the previous stored run of the same dataset version and fails on any per-metric regression, *independent of the absolute thresholds*. A mean can hold steady while some examples break and others improve — the aggregate lies, the diff does not.
-- **Configuration sweep** (`evals/sweep.py`): hybrid vs dense-only vs lexical-only, rerank on/off, across k. This is what turns ADR-010's reranker toggle from a claim into a number, and it is the harness that can show fusion making things *worse* — RRF weights both arms equally, so a strong embedder paired with a weak lexical arm can score worse fused than dense alone.
+- **Configuration sweep** (`evals/sweep.py`): hybrid vs dense-only vs lexical-only, rerank on/off, across k. This is what turns ADR-010's reranker toggle from a claim into a number, and it is what caught the lexical arm returning zero rows on 14 of 20 golden questions (ADR-015) — a bug no test failed on, because RRF fusing an empty arm is indistinguishable from dense-only success. Isolating each arm is the only way to see an arm that has stopped contributing.
 - **Citation validity** is checked deterministically, not prompted for: markers in the answer must be a subset of the retrieved contexts, and violations are counted onto the trace ([ADR-014](docs/adr/ADR-014-citation-validation-is-code.md)).
 - **App telemetry**: structured JSON logging (structlog), request IDs, OpenTelemetry instrumentation on FastAPI + SQLAlchemy (exportable to any OTLP backend).
 
@@ -400,14 +400,29 @@ single aggregate score was hiding:
   filter ([ADR-014](docs/adr/ADR-014-citation-validation-is-code.md)).
 - CI now fails on per-metric *regressions*, not only on absolute thresholds.
 - A config sweep (`evals/sweep.py`) turns ADR-010's reranker toggle and the
-  hybrid-vs-single-arm question into measurements. **Both produced results
-  that contradict the design's assumptions**, which is what a sweep is for:
-  reranking *lowered* aggregate quality (Cohere nDCG@5 0.892, Jina 0.814, vs
-  0.897 unreranked) while adding ~1.2 s per query, and hybrid+RRF (0.897)
-  landed marginally *below* dense-alone (0.906) because Postgres FTS is a
-  weak leg on 500-page control catalogs (lexical-only nDCG@5: 0.267) and RRF
-  weights both arms equally. Both defaults were kept, now for measured
-  reasons rather than assumed ones — see ADR-010 and ADR-002.
+  hybrid-vs-single-arm question into measurements, and **the second one found
+  a bug rather than a trade-off.** Hybrid+RRF scoring nDCG@5 0.897 *below*
+  dense-alone's 0.906 looked like a real finding about fusion, and this
+  document explained it that way: RRF weights both arms equally, Postgres FTS
+  is a weak leg on 500-page catalogs. The actual cause was that the lexical
+  arm returned **zero rows on 14 of 20 golden questions** —
+  `websearch_to_tsquery` ANDs every term, so no chunk could satisfy a whole
+  question. Fusing an empty arm returns the dense ranking unchanged and
+  raises no error, so hybrid search ran as dense-only in production with all
+  425 tests, 4 import contracts and `mypy --strict` green
+  ([ADR-015](docs/adr/ADR-015-lexical-arm-ranks-not-filters.md)). Fixed, the
+  arm scores 0.641 alone and hybrid reaches **0.920** against dense's 0.906 —
+  hybrid beats its best arm, as the design always claimed. Reranking's result
+  stands: it *lowered* quality (Cohere 0.892, Jina 0.814) while adding ~1.2 s
+  per query. Both defaults kept, now for measured reasons — see ADR-010 and
+  ADR-002.
+- **The failure mode worth naming:** a plausible aggregate is the best hiding
+  place a bug has. Nothing crashed, no metric cratered, and the number that
+  was wrong came with a ready explanation that the docs had already written
+  down. It surfaced only by reading per-arm provenance on a single question
+  (`lexical_rank=None` on every candidate) instead of the mean — which is the
+  argument for keeping `dense_rank` / `lexical_rank` on every fused candidate
+  rather than just the fused score.
 - The first abstention run scored `abstention_recall = 1.000` *and*
   `false_abstention_rate = 0.400` — the system declines all 5 negatives and
   also refuses 6 of 15 answerable questions. A single combined score would

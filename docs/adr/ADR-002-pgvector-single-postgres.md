@@ -43,18 +43,22 @@ layer.
   way true BM25 does, so lexical rankings will differ from an Elasticsearch
   or Tantivy baseline. We say "BM25-like" in the docs, not "BM25".
 
-  **Measured 2026-09-02, and the caveat is larger than "marginal".** On the
-  NIST golden set the lexical arm alone scores nDCG@5 **0.267** against dense
-  alone at **0.906**, and hybrid+RRF (0.897) therefore lands *slightly below*
-  dense alone — RRF weights both arms equally, so a weak leg costs rather
-  than adds. On 500-page control catalogs, where query terms recur in
-  hundreds of chunks, the missing saturation and length normalisation bite
-  hard. Hybrid remains the default because the lexical arm's value is
-  categorical (exact identifiers like `AU-11`, `AC-2`, `AAL2` are what dense
-  retrieval misses and what compliance questions are built from) and the gap
-  is 0.009 nDCG on 15 examples — but this is now a **defensible judgement
-  call, not a measured win**, and the exact-BM25 upgrade path below is
-  correspondingly more attractive than it looked.
+  **Measured 2026-09-02, re-measured 2026-09-06.** The first measurement put
+  the lexical arm at nDCG@5 **0.267** and hybrid (0.897) *below* dense alone
+  (0.906), and this ADR concluded the BM25-like caveat was "larger than
+  marginal". That conclusion was wrong, and instructively so: the arm was not
+  weak, it was **empty**. `websearch_to_tsquery` ANDs every term, so whole
+  questions matched no chunk at all — 14 of 20 golden questions returned zero
+  lexical rows. See [ADR-015](ADR-015-lexical-arm-ranks-not-filters.md).
+
+  With the arm actually ranking, lexical alone scores nDCG@5 **0.641** and
+  hybrid+RRF **0.920** against dense's 0.906 — so hybrid *does* beat its
+  strongest arm, and by more at low k (0.933 vs 0.800 at k=1). The BM25-like
+  caveat stands as written — `ts_rank_cd` still has no term saturation or
+  length normalisation, and 0.641 is not what a real BM25 would score — but
+  it is now a genuine caveat about ranking quality rather than an explanation
+  invented for a number produced by a bug. The exact-BM25 upgrade path below
+  remains the honest next step, no more urgent than it was.
 - Scale-out path is documented, not built: exact BM25 via ParadeDB
   `pg_search`, or a Qdrant adapter behind the same `SearchIndex` port (with
   server-side hybrid search) when the vector count or QPS outgrows a single

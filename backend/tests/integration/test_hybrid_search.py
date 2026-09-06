@@ -3,7 +3,7 @@
 Embeddings are unit vectors at hand-chosen angles (see ``support.vector_at``),
 so cosine similarity to the query vector is ``cos(angle)`` and every dense
 ranking below is computable on paper. Lexical texts are crafted so that term
-frequency, AND semantics, and phrase adjacency each decide exactly one case.
+frequency, OR ranking, and phrase adjacency each decide exactly one case.
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ _DOC_A_CHUNKS = [
     ("Postgres vacuum reclaims dead tuples. Vacuum prevents bloat. Run vacuum weekly.", 0.1),
     # seq 1 — "autovacuum" does not stem to "vacuum": lexical miss by design.
     ("The autovacuum daemon schedules maintenance in the background.", 0.4),
-    # seq 2 — contains both "index" and "tuning" for the multi-word AND case.
+    # seq 2 — contains both "index" and "tuning": outranks a partial match.
     ("Index tuning improves query performance in Postgres.", 0.8),
     # seq 3 — "exclusive lock" adjacent: matches the quoted-phrase query.
     ("An update statement acquires an exclusive lock on the modified row.", 1.2),
@@ -51,7 +51,7 @@ _DOC_B_CHUNKS = [
     ("A vacuum truck cleans the streets outside the office.", 1.4),
     # seq 2 — "exclusive ... lock" NOT adjacent: quoted phrase must skip it.
     ("The exclusive table lock blocks concurrent writers.", 1.0),
-    # seq 3 — "index" without "tuning": websearch AND must skip it.
+    # seq 3 — "index" without "tuning": a partial match, ranked but not top.
     ("Index rebuilds can be scheduled at night.", 0.6),
 ]
 # Would win both arms if status filtering leaked non-ready documents.
@@ -183,15 +183,19 @@ class TestLexicalSearch:
         assert [r.chunk_id for r in results] == [corpus.ids_a[0], corpus.ids_b[1]]
         assert results[0].score > results[1].score > 0.0
 
-    async def test_multi_word_query_requires_all_terms(
+    async def test_multi_word_query_ranks_partial_matches_below_full_ones(
         self, session_factory: SessionFactory, corpus: Corpus
     ) -> None:
         index = PostgresSearchIndex(session_factory)
 
         results = await index.lexical_search("index tuning", limit=10)
 
-        # websearch_to_tsquery ANDs plain terms: b3 has "index" but no "tuning".
-        assert [r.chunk_id for r in results] == [corpus.ids_a[2]]
+        # The arm ranks rather than filters: a2 has both terms and wins, but b3
+        # ("index" only) is still a candidate. Under the old AND semantics b3
+        # was dropped outright — and a question containing one unmatched word
+        # dropped *everything*, which is what silently disabled this arm.
+        assert [r.chunk_id for r in results] == [corpus.ids_a[2], corpus.ids_b[3]]
+        assert results[0].score > results[1].score > 0.0
 
     async def test_quoted_phrase_requires_adjacency(
         self, session_factory: SessionFactory, corpus: Corpus
@@ -201,8 +205,9 @@ class TestLexicalSearch:
         unquoted = await index.lexical_search("exclusive lock", limit=10)
         quoted = await index.lexical_search('"exclusive lock"', limit=10)
 
-        # Unquoted: AND semantics match both; quoted: "exclusive table lock"
-        # fails the adjacency requirement.
+        # Relaxing ``&`` to ``|`` must NOT relax quoted phrases: websearch parses
+        # a quoted phrase to ``<->`` adjacency, which contains no top-level
+        # ``&`` to rewrite, so "exclusive table lock" still fails to match.
         assert {r.chunk_id for r in unquoted} == {corpus.ids_a[3], corpus.ids_b[2]}
         assert [r.chunk_id for r in quoted] == [corpus.ids_a[3]]
 
@@ -222,6 +227,27 @@ class TestLexicalSearch:
         # Raw tsquery operators would be syntax errors; websearch input is not.
         results = await index.lexical_search("vacuum & ) | !'", limit=10)
         assert corpus.ids_a[0] in {r.chunk_id for r in results}
+
+    async def test_natural_language_question_still_returns_candidates(
+        self, session_factory: SessionFactory, corpus: Corpus
+    ) -> None:
+        """The regression that made hybrid search dense-only in production.
+
+        Real questions arrive as prose, not keywords. Under AND semantics every
+        word had to co-occur in one chunk, so a question like this one returned
+        ZERO rows — on 14 of 20 golden questions — and RRF silently fused an
+        empty arm. Nothing failed; the arm just stopped contributing. Asserting
+        a non-empty result for a full sentence is what pins that down.
+        """
+        index = PostgresSearchIndex(session_factory)
+
+        results = await index.lexical_search(
+            "How does vacuum reclaim dead tuples and prevent table bloat?", limit=10
+        )
+
+        assert results, "a natural-language question must not return an empty arm"
+        # a0 is the only chunk about reclaiming dead tuples.
+        assert results[0].chunk_id == corpus.ids_a[0]
 
 
 class TestRetrieveContextEndToEnd:

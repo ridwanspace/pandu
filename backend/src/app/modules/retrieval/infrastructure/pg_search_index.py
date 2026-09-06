@@ -46,14 +46,34 @@ LIMIT :limit
 """
 
 # ``websearch_to_tsquery`` accepts raw user input safely (no tsquery syntax
-# errors on quotes/operators); the CROSS JOIN names the parsed query once so
-# match and rank share it.
+# errors on quotes/operators), but it joins every term with AND. That is right
+# for a search box, where the user narrows until few rows come back, and wrong
+# for the lexical arm of a RAG retriever, which must RANK: a natural-language
+# question like "How do the MFA requirements in SP 800-171 relate to the AALs
+# in SP 800-63B?" demands one chunk contain all of {multi-factor, authent,
+# requir, sp, 800-171, relat, assur, level, 800-63b}. No chunk ever does, so
+# the arm returned zero rows on 14 of the 20 golden questions and hybrid search
+# silently degraded to dense-only (see ADR-015).
+#
+# Relaxing ``&`` to ``|`` turns the arm into a ranker: any term may match, and
+# ``ts_rank_cd`` sorts by how many matched, how rare they are, and how close
+# together they sit. Rewriting the *parsed* tsquery rather than the raw string
+# keeps websearch's parsing — quoted phrases stay ``<->`` adjacency, negation
+# stays ``!`` — so only the top-level conjunctions become disjunctions.
+#
+# The CROSS JOIN names the parsed query once so match and rank share it. Both
+# statements are written out in full rather than assembled from a shared
+# fragment: an f-string here would be a string-built SQL statement (ruff S608),
+# and duplicating twelve lines is cheaper than teaching a security lint to
+# trust us. The two must stay in step — the tests cover both paths.
 _LEXICAL_SQL = """
 SELECT c.id, c.document_id, c.seq, c.text, c.heading_path, d.filename,
        ts_rank_cd(c.tsv, query) AS score
 FROM chunks c
 JOIN documents d ON d.id = c.document_id
-CROSS JOIN websearch_to_tsquery('english', :q) AS query
+CROSS JOIN (
+  SELECT replace(websearch_to_tsquery('english', :q)::text, ' & ', ' | ')::tsquery
+) AS t(query)
 WHERE d.status = 'ready' AND c.tsv @@ query
 ORDER BY score DESC, c.id
 LIMIT :limit
@@ -64,7 +84,9 @@ SELECT c.id, c.document_id, c.seq, c.text, c.heading_path, d.filename,
        ts_rank_cd(c.tsv, query) AS score
 FROM chunks c
 JOIN documents d ON d.id = c.document_id
-CROSS JOIN websearch_to_tsquery('english', :q) AS query
+CROSS JOIN (
+  SELECT replace(websearch_to_tsquery('english', :q)::text, ' & ', ' | ')::tsquery
+) AS t(query)
 WHERE d.status = 'ready' AND c.tsv @@ query AND c.document_id = ANY(:ids)
 ORDER BY score DESC, c.id
 LIMIT :limit

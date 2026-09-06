@@ -305,17 +305,24 @@ evals:    (nightly + on-demand label) ingest corpus → rank metrics on golden s
 Evaluation is the differentiator between "it seems to work" and "it works,
 and here is by how much."
 
-**Measured on the NIST corpus** — `golden_v2`, 2026-09-02,
+**Measured on the NIST corpus** — `golden_v2`, 2026-09-06,
 `gemini-embedding-001` embeddings, hybrid + RRF, no reranker, 1826 chunks
 across the four NIST publications, 15 answerable examples + 5 negatives:
 
 | Metric | k=1 | k=3 | **k=5** | k=10 | Gate |
 |---|---|---|---|---|---|
-| recall@k | 0.767 | 0.933 | **0.967** | 0.967 | ≥ 0.60 |
-| precision@k | 0.800 | 0.822 | **0.760** | 0.660 | — |
-| MRR | 0.800 | 0.889 | **0.889** | 0.889 | — |
-| nDCG@k | 0.800 | 0.880 | **0.897** | 0.897 | — |
-| hit-rate@k | 0.800 | 1.000 | **1.000** | 1.000 | — |
+| recall@k | 0.833 | 0.867 | **0.967** | 0.967 | ≥ 0.60 |
+| precision@k | 0.933 | 0.778 | **0.680** | 0.540 | — |
+| MRR | 0.933 | 0.933 | **0.947** | 0.947 | — |
+| nDCG@k | 0.933 | 0.876 | **0.920** | 0.920 | — |
+| hit-rate@k | 0.933 | 0.933 | **1.000** | 1.000 | — |
+
+Superseded the 2026-09-02 run (nDCG@5 0.897, MRR 0.889): those numbers were
+taken while the lexical arm silently returned nothing on 14 of 20 questions,
+so "hybrid" was measuring dense-only. See
+[ADR-015](docs/adr/ADR-015-lexical-arm-ranks-not-filters.md). Precision@5
+fell 0.760 → 0.680 in the same change — the real cost of a live lexical arm.
+Abstention and judge scores below still predate the fix and are due a re-run.
 
 | Abstention (LLM-free scoring) | Score | Gate |
 |---|---|---|
@@ -428,39 +435,51 @@ ones that can fall:
 
 | Configuration | recall@5 | precision@5 | MRR | nDCG@5 | latency |
 |---|---|---|---|---|---|
-| **hybrid + RRF** (the default) | 0.967 | 0.760 | 0.889 | 0.897 | 602 ms |
-| dense only | 0.967 | 0.747 | **0.900** | **0.906** | 587 ms |
-| lexical only | 0.267 | 0.267 | 0.267 | 0.267 | 530 ms |
-| hybrid + Cohere `rerank-v3.5` | 0.933 | 0.733 | **0.922** | 0.892 | 1803 ms |
+| **hybrid + RRF** (the default) | 0.967 | 0.680 | **0.947** | **0.920** | 484 ms |
+| dense only | 0.967 | **0.747** | 0.900 | 0.906 | 500 ms |
+| lexical only | 0.733 | 0.440 | 0.658 | 0.641 | 485 ms |
+| hybrid + Cohere `rerank-v3.5` | 0.933 | 0.733 | 0.922 | 0.892 | 1803 ms |
 | hybrid + Jina `v2-base-multilingual` | 0.900 | 0.667 | 0.822 | 0.814 | 1692 ms |
 
-Three findings, two of them inconvenient:
+Three findings, one of them a bug this sweep is what caught:
 
-1. **Reranking made retrieval worse, and cost ~1.2 s per query.** Cohere
+1. **The lexical arm was returning nothing at all, and every aggregate looked
+   plausible anyway.** `websearch_to_tsquery` ANDs every term, so a whole
+   question demanded that one 512-token chunk contain all nine of
+   {multi-factor, authent, requir, sp, 800-171, relat, assur, level, 800-63b}.
+   **14 of 20 golden questions returned zero lexical rows.** RRF fusing an
+   empty arm is not an error — it just returns the dense ranking — so hybrid
+   search ran as dense-only in production with every test, contract and type
+   check green. The earlier reading of this table ("hybrid loses to dense
+   because Postgres FTS is a weak leg") was measuring a dead arm and calling
+   it a finding about fusion.
+   [ADR-015](docs/adr/ADR-015-lexical-arm-ranks-not-filters.md) has the
+   diagnosis; the fix relaxes the parsed tsquery's top-level `&` to `|` so the
+   arm ranks instead of filters, keeping phrase and negation handling intact.
+2. **With the arm alive, hybrid beats dense — which is what it was always
+   supposed to do.** nDCG 0.920 vs 0.906 and MRR 0.947 vs 0.900 at k=5, and
+   the gap is widest where it matters most: at k=1 hybrid scores nDCG 0.933
+   against dense's 0.800. Chunks that both arms agree on now compound under
+   RRF, which is the entire premise of hybrid retrieval.
+   Precision@5 falls 0.760 → 0.680 — the honest cost of a live lexical arm
+   promoting vocabulary matches that are not the best answer.
+3. **Reranking made retrieval worse, and cost ~1.2 s per query.** Cohere
    nudged MRR up (0.889 → 0.922 — it *does* sharpen the top position) but
    dropped recall, precision and nDCG; Jina lost on every metric. This is
    exactly the situation [ADR-010](docs/adr/ADR-010-reranker-default-noop.md)
    assumed without proof when it defaulted the reranker to a no-op. The
    default was right, and now it is right *for a measured reason*.
-2. **Hybrid does not beat dense alone here.** RRF weights both arms equally,
-   and with `gemini-embedding-001` the lexical arm is very much the weaker
-   leg (nDCG 0.267 vs 0.906) — so fusion drags the strong retriever down
-   slightly rather than lifting it. Hybrid is a hypothesis to test per
-   corpus, not a law.
-3. **The lexical arm is genuinely weak on this corpus, and that is
-   informative, not broken.** Postgres FTS is BM25-*like*: `ts_rank_cd` has
-   no term saturation or length normalisation. On 500-page control catalogs,
-   where a query's terms appear in hundreds of chunks, that limitation bites
-   hard.
+   (Reranker rows predate the lexical fix and are due a re-run.)
 
-**Why hybrid is still the default despite the number.** The gap is 0.009
-nDCG — inside the noise of a 15-example set — while the lexical arm's value
-is categorical rather than average: exact identifiers (`AU-11`, `AC-2`,
-`AAL2`) are precisely what dense retrieval misses and what compliance
-questions are made of. Removing the arm to chase a third-decimal gain would
-optimise for this golden set rather than for the queries the system exists
-to answer. The honest position is that this is a **defensible choice, not a
-measured win** — and the sweep is committed so anyone can check it.
+**The lesson worth more than the numbers.** A silently-empty arm is the
+failure mode a coverage gate cannot see: nothing threw, nothing regressed,
+and the eval suite dutifully reported an aggregate that was *explainable*.
+It stayed hidden because the integration test asserted AND semantics as the
+specification — the bug was pinned as intent. What caught it was reading
+per-arm provenance on one question (`dense_rank=1, lexical_rank=None`, on
+every candidate) rather than trusting the mean. The regression test now sends
+a full natural-language sentence and asserts the arm is non-empty.
+
 - **Langfuse** (optional compose profile — v3 needs ClickHouse + MinIO)
   gives every chat request a full trace: candidate sets, RRF ranks, rerank
   scores, generation span, token usage, cost. Eval scores are written back
@@ -524,12 +543,20 @@ Qdrant's core API has no BM25
 
 **Next, and named by a measurement rather than a hunch:**
 
-1. **Per-document context caps.** Cross-document faithfulness is 0.577 against
-   0.868 single-source because one publication takes all five context slots.
-   A diversity constraint over the fused candidates is the smallest fix.
-2. **Reduce the 0.400 false-abstention rate.** The system declines 6 of 15
+1. **Re-measure the judge and abstention tracks.** Both predate the ADR-015
+   lexical fix, which changed what reaches the LLM on most questions. The
+   0.798 faithfulness figure and the 0.400 false-abstention rate are stale
+   until re-run — and the cross-document diagnosis below depends on them.
+2. **Cross-document faithfulness (0.577 vs 0.868 single-source).** Per-document
+   context caps were the obvious fix and were **measured and rejected** — see
+   ADR-015: every cap value trades recall and hit-rate away to fix one of three
+   cross-document questions. This is a ranking problem, not a slot-allocation
+   problem, so the candidates are query decomposition for multi-source
+   questions, or a diversity term inside the fusion score rather than a filter
+   after it.
+3. **Reduce the 0.400 false-abstention rate.** The system declines 6 of 15
    answerable questions — safe, but not useful.
-3. **Per-example regression diffing.** The current diff is per-metric; it sees
+4. **Per-example regression diffing.** The current diff is per-metric; it sees
    that something moved, not which question broke.
 
 Beyond that: multi-tenant workspaces, a closed-set abstention label on the

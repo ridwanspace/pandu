@@ -9,6 +9,13 @@ promised below now exists (`evals/sweep.py`), and it *supports* the default:
 | hybrid + Cohere `rerank-v3.5` | 0.933 | 0.733 | **0.922** | 0.892 | 1803 ms |
 | hybrid + Jina `v2-base-multilingual` | 0.900 | 0.667 | 0.822 | 0.814 | 1692 ms |
 
+> **Re-measured 2026-09-06.** These rows were taken while the lexical arm was
+> silently returning nothing ([ADR-015](ADR-015-lexical-arm-ranks-not-filters.md)),
+> so the "hybrid, no reranker" baseline was effectively dense-only. With the
+> arm fixed that baseline rises to nDCG@5 **0.920** / MRR **0.947**, which
+> *widens* the gap to both rerankers and strengthens this decision rather
+> than weakening it. The reranker rows themselves have not been re-run.
+
 Both hosted rerankers *lowered* aggregate quality on the NIST golden set
 while adding ~1.2 s per query. Cohere did sharpen the top position (MRR
 0.889 → 0.922), which is the one thing a cross-encoder is supposed to do —
